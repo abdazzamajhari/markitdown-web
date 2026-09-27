@@ -200,6 +200,19 @@ def test_pdf_table_cells_use_selectable_text_positions(client):
     assert all(.08 < cell["y"] < .13 for cell in cells)
 
 
+def test_single_pdf_text_line_takes_precedence_over_duplicate_ocr(monkeypatch):
+    original = worker.read_pdf_text_regions
+    monkeypatch.setattr(worker, "read_pdf_text_regions", lambda data, page: original(data, page)[:1])
+    duplicate = {"x": .09, "y": .08, "w": .18, "h": .03,
+                 "text": "LEFT CELL", "source": "tesseract"}
+    monkeypatch.setattr(worker, "read_image_regions", lambda *args, **kwargs:
+                        (0, json.dumps({"regions": [duplicate], "text": "LEFT CELL"}).encode()))
+    code, output = worker.read_pdf_preview(table_text_pdf(), 1)
+    payload = json.loads(output)
+    assert code == 0 and payload["page_source"] == "pdf-text"
+    assert payload["page_text"] == "LEFT CELL"
+
+
 def test_region_merge_keeps_new_table_cells_without_repeating_text():
     text_layer = [{"x": .1, "y": .2, "w": .25, "h": .03, "text": "LEFT CELL", "source": "pdf-text"}]
     ocr = [

@@ -330,7 +330,7 @@ def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
             if not payload["regions"]:
                 payload["warning"] = "Teks PDF dan OCR lokal tidak menemukan kotak pada halaman ini. Coba lagi atau unggah halaman sebagai gambar."
         if text_regions and (not payload["page_text"] or
-                             (len(text_regions) >= 2 and ocr_region_count <= len(text_regions) * 2 + 5)):
+                             ocr_region_count <= len(text_regions) * 2 + 5):
             payload["page_text"] = "\n".join(region["text"] for region in text_regions)
             payload["page_source"] = "pdf-text"
         if text_regions:
