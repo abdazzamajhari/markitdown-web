@@ -32,8 +32,8 @@ MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 MAX_REQUESTS_PER_MINUTE = 12
 MAX_REMOTE_REQUESTS_PER_HOUR = 30
-DEEPINFRA_URL = "https://api.deepinfra.com/v1/openai/chat/completions"
-DEEPINFRA_MODEL = "allenai/olmOCR-2-7B-1025"
+OLMOCR_URL = "https://ai2endpoints.cirrascale.ai/api/chat/completions"
+OLMOCR_MODEL = "olmOCR-2-7B-1025"
 OLMOCR_PROMPT = (
     "Attached is one document image. Transcribe all readable text in natural order. "
     "Represent tables as HTML and equations as LaTeX. Do not invent text. "
@@ -126,7 +126,7 @@ def convert_olmocr(data: bytes, extension: str) -> str:
     if len(png) > MAX_BYTES:
         raise HTTPException(413, "Gambar terlalu besar untuk olmOCR 2")
     payload = {
-        "model": DEEPINFRA_MODEL,
+        "model": OLMOCR_MODEL,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": OLMOCR_PROMPT},
             {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}},
@@ -137,8 +137,8 @@ def convert_olmocr(data: bytes, extension: str) -> str:
     }
     try:
         result = httpx.post(
-            DEEPINFRA_URL, json=payload,
-            headers={"Authorization": "Bearer " + os.environ["DEEPINFRA_API_KEY"]},
+            OLMOCR_URL, json=payload,
+            headers={"Authorization": "Bearer " + os.environ["CIRRASCALE_API_KEY"]},
             timeout=80, follow_redirects=False,
         )
     except httpx.HTTPError:
@@ -147,8 +147,10 @@ def convert_olmocr(data: bytes, extension: str) -> str:
         raise HTTPException(503, "Kunci layanan olmOCR 2 tidak valid")
     if result.status_code == 429:
         raise HTTPException(503, "Kuota layanan olmOCR 2 tercapai; coba lagi nanti")
-    if result.status_code != 200 or len(result.content) > MAX_OUTPUT_BYTES + 65536:
-        raise HTTPException(502, "olmOCR 2 gagal memproses gambar")
+    if result.status_code != 200:
+        raise HTTPException(502, f"Penyedia olmOCR 2 mengembalikan HTTP {result.status_code}")
+    if len(result.content) > MAX_OUTPUT_BYTES + 65536:
+        raise HTTPException(502, "Jawaban olmOCR 2 terlalu besar")
     try:
         markdown = result.json()["choices"][0]["message"]["content"]
         if not isinstance(markdown, str):
@@ -172,7 +174,7 @@ async def health():
 
 @app.get("/api/capabilities")
 async def capabilities():
-    return {"image_ocr": "olmocr2" if os.environ.get("DEEPINFRA_API_KEY") else "tesseract"}
+    return {"image_ocr": "olmocr2" if os.environ.get("CIRRASCALE_API_KEY") else "tesseract"}
 
 
 @app.get("/", include_in_schema=False)
@@ -206,7 +208,7 @@ async def convert_file(request: Request):
             recent_requests.popleft()
         while remote_requests and remote_requests[0] <= now - 3600:
             remote_requests.popleft()
-        use_olmocr = extension in IMAGE_FORMATS and bool(os.environ.get("DEEPINFRA_API_KEY"))
+        use_olmocr = extension in IMAGE_FORMATS and bool(os.environ.get("CIRRASCALE_API_KEY"))
         if len(recent_requests) >= MAX_REQUESTS_PER_MINUTE:
             raise HTTPException(429, "Batas konversi sementara tercapai; coba lagi sebentar")
         if use_olmocr and len(remote_requests) >= MAX_REMOTE_REQUESTS_PER_HOUR:

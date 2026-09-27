@@ -15,7 +15,7 @@ from app.main import MAX_REQUESTS_PER_MINUTE, app, recent_requests, remote_reque
 def client(monkeypatch):
     recent_requests.clear()
     remote_requests.clear()
-    monkeypatch.delenv("DEEPINFRA_API_KEY", raising=False)
+    monkeypatch.delenv("CIRRASCALE_API_KEY", raising=False)
     return TestClient(app)
 
 
@@ -31,6 +31,11 @@ def test_health_and_home(client):
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/api/capabilities").json() == {"image_ocr": "tesseract"}
     assert "MarkItDown Web" in client.get("/").text
+
+
+def test_retired_deepinfra_key_never_claims_olmocr2(client, monkeypatch):
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "obsolete-key")
+    assert client.get("/api/capabilities").json() == {"image_ocr": "tesseract"}
 
 
 def test_real_text_conversion(client):
@@ -112,7 +117,7 @@ def test_transparent_screenshot_ocr(client):
 
 
 def test_olmocr2_provider_request_and_output(client, monkeypatch):
-    monkeypatch.setenv("DEEPINFRA_API_KEY", "server-only-test-key")
+    monkeypatch.setenv("CIRRASCALE_API_KEY", "server-only-test-key")
     assert client.get("/api/capabilities").json() == {"image_ocr": "olmocr2"}
     seen = {}
 
@@ -129,8 +134,8 @@ def test_olmocr2_provider_request_and_output(client, monkeypatch):
     assert response.status_code == 200, response.text
     assert response.text == "HELLO 123"
     assert response.headers["x-ocr-engine"] == "olmocr2"
-    assert seen["url"] == "https://api.deepinfra.com/v1/openai/chat/completions"
-    assert seen["body"]["model"] == "allenai/olmOCR-2-7B-1025"
+    assert seen["url"] == "https://ai2endpoints.cirrascale.ai/api/chat/completions"
+    assert seen["body"]["model"] == "olmOCR-2-7B-1025"
     assert seen["headers"]["Authorization"] == "Bearer server-only-test-key"
     assert seen["redirects"] is False
     encoded = seen["body"]["messages"][0]["content"][1]["image_url"]["url"].split(",", 1)[1]
@@ -139,7 +144,7 @@ def test_olmocr2_provider_request_and_output(client, monkeypatch):
 
 
 def test_olmocr2_provider_error_does_not_fall_back(client, monkeypatch):
-    monkeypatch.setenv("DEEPINFRA_API_KEY", "server-only-test-key")
+    monkeypatch.setenv("CIRRASCALE_API_KEY", "server-only-test-key")
     monkeypatch.setattr("app.main.httpx.post", lambda *a, **k: httpx.Response(401, text="secret provider body"))
     image = Image.new("RGB", (100, 100), "white")
     buffer = io.BytesIO()
@@ -172,7 +177,7 @@ def test_public_quota(client, monkeypatch):
 
 
 def test_olmocr2_hourly_quota(client, monkeypatch):
-    monkeypatch.setenv("DEEPINFRA_API_KEY", "server-only-test-key")
+    monkeypatch.setenv("CIRRASCALE_API_KEY", "server-only-test-key")
     monkeypatch.setattr("app.main.MAX_REQUESTS_PER_MINUTE", 100)
     monkeypatch.setattr("app.main.convert_olmocr", lambda data, extension: "ok")
     for _ in range(30):
