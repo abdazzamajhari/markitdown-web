@@ -47,7 +47,18 @@
           <button id="download-combined" class="secondary-button" type="button" disabled>↓ Gabungan .md</button>
         </div>
       </div>
-      <div id="empty-state" class="empty-state"><span aria-hidden="true">▤</span><p>Hasil Markdown akan muncul di sini.<br><small>Setiap berkas memiliki pratinjau dan unduhan sendiri.</small></p></div>
+      <div id="empty-state" class="empty-state">
+        <div class="demo-heading"><div><strong>Contoh kotak OCR</strong><p>Ilustrasi saja. Unggah gambar untuk melihat kotak pada berkas Anda.</p></div><span class="demo-tag">CONTOH</span></div>
+        <div class="demo-grid">
+          <div class="demo-paper" aria-label="Ilustrasi dokumen dengan kotak lokasi teks">
+            <span class="demo-logo">NUSA STUDIO</span><span class="demo-rule"></span>
+            <button class="demo-box demo-box-title selected" type="button" data-demo="FAKTUR 2026-001" aria-label="Contoh area judul faktur">FAKTUR 2026-001</button>
+            <button class="demo-box demo-box-date" type="button" data-demo="Tanggal: 27 September 2026" aria-label="Contoh area tanggal">Tanggal: 27 September 2026</button>
+            <button class="demo-box demo-box-total" type="button" data-demo="Total: Rp125.000" aria-label="Contoh area total">Total: Rp125.000</button>
+          </div>
+          <div class="demo-output"><span class="demo-output-title">Teks pada area terpilih</span><p id="demo-text">FAKTUR 2026-001</p><small>Klik kotak merah pada ilustrasi. Setelah unggahan, hasil asli muncul di tempat ini.</small></div>
+        </div>
+      </div>
       <ol id="files" class="file-list"></ol>
     </section>
     <footer>Berkas diproses dalam memori server dan tidak disimpan permanen. Pratinjau lokasi teks memakai OCR lokal; hasil transkripsi gambar memakai mesin yang tertera pada setiap berkas.</footer>

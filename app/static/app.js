@@ -77,7 +77,6 @@ function markError(item, message) {
 function addFiles(files) {
   const selected = Array.from(files);
   if (!selected.length) return;
-  emptyState.hidden = true;
   let omitted = 0;
   for (const file of selected) {
     if (queue.length + Number(running) >= maxQueue) { omitted += 1; continue; }
@@ -157,13 +156,27 @@ function renderDetail(item, markdown, engine) {
   const details = document.createElement('details');
   details.className = 'result-detail';
   const summary = document.createElement('summary');
-  summary.textContent = imageFormats.has(item.extension) ? 'Lihat teks & lokasi pada gambar' : 'Lihat detail teks yang diekstraksi';
+  summary.textContent = imageFormats.has(item.extension) ? 'Gambar dan kotak OCR · klik untuk sembunyikan' : 'Lihat detail teks yang diekstraksi';
   const grid = document.createElement('div');
   grid.className = 'detail-grid';
   if (!imageFormats.has(item.extension)) grid.classList.add('text-only');
   let loadRegions;
   if (imageFormats.has(item.extension)) {
+    details.open = true;
     const source = makePane('Gambar sumber', 'Kotak: OCR lokal');
+    const zoom = document.createElement('button');
+    zoom.type = 'button';
+    zoom.className = 'zoom-button';
+    zoom.textContent = 'Perbesar gambar';
+    zoom.addEventListener('click', () => {
+      const expanded = grid.classList.toggle('zoomed');
+      zoom.textContent = expanded ? 'Kembalikan ukuran' : 'Perbesar gambar';
+    });
+    source.querySelector('.detail-pane-head').append(zoom);
+    const legend = document.createElement('div');
+    legend.className = 'region-legend';
+    legend.textContent = '▣ Kotak merah menandai area OCR lokal. Klik kotaknya untuk melihat teks.';
+    source.append(legend);
     const scroll = document.createElement('div');
     scroll.className = 'image-scroll';
     const frame = document.createElement('div');
@@ -177,7 +190,7 @@ function renderDetail(item, markdown, engine) {
     scroll.append(frame);
     const regionMessage = document.createElement('p');
     regionMessage.className = 'region-message';
-    regionMessage.textContent = 'Buka detail untuk memetakan lokasi teks.';
+    regionMessage.textContent = 'Menyiapkan kotak OCR…';
     source.append(scroll, regionMessage);
     grid.append(source);
     let loaded = false, loading = false;
@@ -216,8 +229,8 @@ function renderDetail(item, markdown, engine) {
           });
           layer.append(box);
         }
-        regionMessage.textContent = regions.length
-          ? `${regions.length} area terdeteksi oleh OCR lokal. Klik kotak untuk membaca teks per area.`
+        regionMessage.textContent = layer.childElementCount
+          ? `${layer.childElementCount} area terdeteksi oleh OCR lokal. Klik kotak untuk membaca teks per area.`
           : 'OCR lokal tidak menemukan area teks. Hasil transkripsi utama tetap tersedia di kanan.';
         loaded = true;
       } catch (error) {
@@ -239,6 +252,7 @@ function renderDetail(item, markdown, engine) {
   details.append(summary, grid, note);
   if (loadRegions) details.addEventListener('toggle', () => { if (details.open) void loadRegions(); });
   item.row.append(actions, details);
+  return loadRegions;
 }
 
 async function processQueue() {
@@ -255,7 +269,10 @@ async function processQueue() {
       const label = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract' ? 'OCR lokal' : 'MarkItDown';
       item.state.textContent = markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       completed.push({name: item.file.name, markdown});
-      renderDetail(item, markdown, engine);
+      emptyState.hidden = true;
+      const loadRegions = renderDetail(item, markdown, engine);
+      updateStatus();
+      if (loadRegions) await loadRegions();
     } catch (error) { markError(item, error.message || 'Konversi gagal'); }
     updateStatus();
   }
@@ -271,6 +288,13 @@ downloadCombined.addEventListener('click', () => {
   const text = completed.map(({name, markdown}) => `# ${name.replace(/[\r\n]/g, ' ')}\n\n${markdown}`).join('\n\n---\n\n');
   saveBlob(new Blob([text], {type: 'text/markdown;charset=utf-8'}), 'markitdown-gabungan.md');
 });
+for (const box of document.querySelectorAll('.demo-box')) {
+  box.addEventListener('click', () => {
+    document.querySelector('.demo-box.selected')?.classList.remove('selected');
+    box.classList.add('selected');
+    document.querySelector('#demo-text').textContent = box.dataset.demo;
+  });
+}
 zone.addEventListener('click', () => picker.click());
 picker.addEventListener('change', () => { addFiles(picker.files); picker.value = ''; });
 for (const eventName of ['dragenter', 'dragover']) {

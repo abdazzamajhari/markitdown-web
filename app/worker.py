@@ -70,41 +70,45 @@ def read_image_regions(data: bytes, extension: str) -> tuple[int, bytes]:
     """Return local OCR line positions for a visual guide, separate from AI output."""
     from PIL import Image
 
-    code, png = prepare_image(data, extension, for_vision=True)
+    # Keep the screenshot's full resolution so small UI text remains detectable.
+    code, png = prepare_image(data, extension)
     if code:
         return code, b""
     with Image.open(io.BytesIO(png)) as image:
         width, height = image.size
-    try:
-        result = subprocess.run(
-            ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", "3", "tsv"],
-            input=png, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            check=False, timeout=18,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return 2, b""
-    if result.returncode != 0:
-        return 2, b""
     lines = {}
-    try:
-        for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", "replace")), delimiter="\t"):
-            word = row["text"].strip()
-            if row["level"] != "5" or not word or float(row["conf"]) < 0:
-                continue
-            x, y, w, h = (int(row[k]) for k in ("left", "top", "width", "height"))
-            if w <= 0 or h <= 0:
-                continue
-            key = (row["page_num"], row["block_num"], row["par_num"], row["line_num"])
-            if key not in lines:
-                lines[key] = {"x": x, "y": y, "right": x + w, "bottom": y + h, "words": []}
-            line = lines[key]
-            line["x"] = min(line["x"], x)
-            line["y"] = min(line["y"], y)
-            line["right"] = max(line["right"], x + w)
-            line["bottom"] = max(line["bottom"], y + h)
-            line["words"].append(word)
-    except (KeyError, TypeError, ValueError):
-        return 2, b""
+    for psm in ("3", "11"):
+        try:
+            result = subprocess.run(
+                ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", psm, "tsv"],
+                input=png, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                check=False, timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return 2, b""
+        if result.returncode != 0:
+            return 2, b""
+        try:
+            for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", "replace")), delimiter="\t"):
+                word = row["text"].strip()
+                if row["level"] != "5" or not word or float(row["conf"]) < 0:
+                    continue
+                x, y, w, h = (int(row[k]) for k in ("left", "top", "width", "height"))
+                if w <= 0 or h <= 0:
+                    continue
+                key = (row["page_num"], row["block_num"], row["par_num"], row["line_num"])
+                if key not in lines:
+                    lines[key] = {"x": x, "y": y, "right": x + w, "bottom": y + h, "words": []}
+                line = lines[key]
+                line["x"] = min(line["x"], x)
+                line["y"] = min(line["y"], y)
+                line["right"] = max(line["right"], x + w)
+                line["bottom"] = max(line["bottom"], y + h)
+                line["words"].append(word)
+        except (KeyError, TypeError, ValueError):
+            return 2, b""
+        if lines:
+            break
     regions = []
     for line in list(lines.values())[:600]:
         regions.append({
