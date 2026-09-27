@@ -2,8 +2,10 @@ import base64
 import io
 import json
 import os
+import subprocess
 import time
 import zipfile
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -190,6 +192,8 @@ def test_pdf_table_cells_use_selectable_text_positions(client):
     cells = [region for region in payload["regions"] if region["source"] == "pdf-text"]
     assert payload["image"].startswith("data:image/jpeg;base64,")
     assert payload["engine"] == "pdf-text+tesseract"
+    assert payload["page_source"] == "pdf-text"
+    assert "LEFT CELL" in payload["page_text"] and "RIGHT CELL" in payload["page_text"]
     assert len(cells) == 2
     assert {cell["text"] for cell in cells} == {"LEFT CELL", "RIGHT CELL"}
     assert cells[0]["x"] < .5 < cells[1]["x"]
@@ -203,6 +207,30 @@ def test_region_merge_keeps_new_table_cells_without_repeating_text():
         {"x": .52, "y": .2, "w": .25, "h": .03, "text": "RIGHT CELL", "source": "tesseract"},
     ]
     assert [box["text"] for box in worker.merge_regions(text_layer, ocr)] == ["LEFT CELL", "RIGHT CELL"]
+
+
+def test_ocr_preview_retries_smaller_image_after_sparse_pass_timeout(monkeypatch):
+    calls = []
+    tsv = (b"level\tpage_num\tblock_num\tpar_num\tline_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+           b"5\t1\t1\t1\t1\t40\t30\t100\t25\t91\tTABLE\n")
+
+    def fake_tesseract(command, **kwargs):
+        calls.append((command, kwargs["input"]))
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stdout=tsv)
+
+    monkeypatch.setattr(worker.subprocess, "run", fake_tesseract)
+    image = Image.new("RGB", (1600, 600), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG")
+    code, output = worker.read_image_regions(buffer.getvalue(), ".jpg", max_dimension=1600)
+    payload = json.loads(output)
+    assert code == 0 and payload["text"] == "TABLE"
+    assert len(payload["regions"]) == 1
+    assert [call[0][6] for call in calls] == ["11", "11"]
+    with Image.open(io.BytesIO(calls[1][1])) as smaller:
+        assert max(smaller.size) == 1000
 
 
 def test_scanned_pdf_ocr_and_visible_boxes_on_each_page(client):
@@ -225,11 +253,38 @@ def test_scanned_pdf_ocr_and_visible_boxes_on_each_page(client):
         with Image.open(io.BytesIO(base64.b64decode(result["image"].split(",", 1)[1]))) as rendered:
             assert rendered.format == "JPEG"
         assert result["regions"]
+        assert result["page_source"] == "tesseract"
+        assert str(page) in result["page_text"]
         assert str(page) in " ".join(region["text"] for region in result["regions"])
         assert all(0 <= region[key] <= 1 for region in result["regions"] for key in ("x", "y", "w", "h"))
         assert preview.headers["cache-control"] == "no-store"
     assert client.post("/api/pdf-preview?page=5", content=scanned, headers={"X-Filename": "faktur.pdf"}).status_code == 400
     assert client.post("/api/pdf-preview", content=scanned, headers={"X-Filename": "faktur.txt"}).status_code == 415
+
+
+def test_screenshot_table_in_pdf_provides_boxes_and_page_transcription(client):
+    image = Image.new("RGB", (1100, 700), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=45)
+    for x in (50, 540, 1050):
+        draw.line((x, 150, x, 590), fill="black", width=3)
+    for y in (150, 295, 440, 590):
+        draw.line((50, y, 1050, y), fill="black", width=3)
+    draw.text((90, 185), "COURSE", font=font, fill="black")
+    draw.text((580, 185), "GRADE", font=font, fill="black")
+    draw.text((90, 335), "CALCULUS", font=font, fill="black")
+    draw.text((580, 335), "PASS", font=font, fill="black")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PDF")
+    response = client.post(
+        "/api/pdf-preview?page=1", content=buffer.getvalue(),
+        headers={"X-Filename": "table-scan.pdf"},
+    )
+    assert response.status_code == 200, response.text[:200]
+    payload = response.json()
+    assert payload["page_source"] == "tesseract"
+    assert "COURSE" in payload["page_text"] and "CALCULUS" in payload["page_text"]
+    assert any("GRADE" in box["text"] and box["x"] > .4 for box in payload["regions"])
 
 
 def test_pdf_preview_preserves_navigation_when_page_ocr_or_render_fails(monkeypatch):
@@ -251,13 +306,13 @@ def test_pdf_preview_preserves_navigation_when_page_ocr_or_render_fails(monkeypa
     code, output = worker.read_pdf_preview(pdf, 4)
     assert code == 0 and json.loads(output)["regions"]
 
-    monkeypatch.setattr(worker, "read_image_regions", lambda data, extension: (2, b""))
+    monkeypatch.setattr(worker, "read_image_regions", lambda data, extension, **kwargs: (2, b""))
     code, output = worker.read_pdf_preview(pdf, 2)
     payload = json.loads(output)
     assert code == 0 and payload["image"].startswith("data:image/jpeg;base64,")
     assert payload["regions"] == [] and "OCR lokal" in payload["warning"]
 
-    monkeypatch.setattr(worker, "read_image_regions", lambda data, extension: (0, b'{"regions": []}'))
+    monkeypatch.setattr(worker, "read_image_regions", lambda data, extension, **kwargs: (0, b'{"regions": []}'))
     code, output = worker.read_pdf_preview(pdf, 1)
     payload = json.loads(output)
     assert code == 0 and payload["image"].startswith("data:image/jpeg;base64,")
