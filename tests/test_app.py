@@ -3,6 +3,7 @@ import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image, ImageDraw, ImageFont
 
 from app.main import MAX_REQUESTS_PER_MINUTE, app, recent_requests
 
@@ -76,6 +77,21 @@ def test_real_pptx_conversion(client):
     assert "Isi slide" in response.text
 
 
+@pytest.mark.parametrize("format_name,extension", [
+    ("PNG", ".png"), ("JPEG", ".jpg"), ("WEBP", ".webp"),
+])
+def test_real_image_ocr(client, format_name, extension):
+    image = Image.new("RGB", (640, 150), "white")
+    ImageDraw.Draw(image).text(
+        (20, 25), "HELLO 123", font=ImageFont.load_default(size=72), fill="black",
+    )
+    buffer = io.BytesIO()
+    image.save(buffer, format=format_name)
+    response = upload(client, "screenshot" + extension, buffer.getvalue())
+    assert response.status_code == 200, response.text
+    assert "HELLO 123" in response.text
+
+
 def test_public_conversion_ignores_old_secret(client, monkeypatch):
     monkeypatch.setenv("WEB_API_KEY", "old-secret")
     assert upload(client, "a.txt", b"hi").status_code == 200
@@ -94,6 +110,8 @@ def test_public_quota(client, monkeypatch):
     ("fake.pdf", b"This is not a PDF", 415),
     ("empty.txt", b"", 400),
     ("bad.txt", b"\xff", 415),
+    ("fake.png", b"not an image", 415),
+    ("fake.webp", b"RIFF0000WRONG", 415),
     ("large.txt", b"a" * (10 * 1024 * 1024 + 1), 413),
 ])
 def test_rejects_unsafe_uploads(client, name, content, expected):
@@ -105,3 +123,15 @@ def test_office_zip_is_checked(client):
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("something.txt", "no office parts")
     assert upload(client, "fake.docx", buffer.getvalue()).status_code == 415
+
+
+def test_image_format_and_pixel_limit(client):
+    image = Image.new("RGB", (20, 20), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    assert upload(client, "wrong.jpg", buffer.getvalue()).status_code == 415
+
+    large = Image.new("RGB", (3000, 3000), "white")
+    buffer = io.BytesIO()
+    large.save(buffer, format="PNG")
+    assert upload(client, "large.png", buffer.getvalue()).status_code == 413

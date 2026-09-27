@@ -17,7 +17,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 ROOT = Path(__file__).resolve().parent
-ALLOWED = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".csv", ".json"}
+IMAGE_FORMATS = {".png": b"\x89PNG\r\n\x1a\n", ".jpg": b"\xff\xd8\xff", ".jpeg": b"\xff\xd8\xff", ".webp": b"RIFF"}
+ALLOWED = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".csv", ".json", *IMAGE_FORMATS}
 OFFICE_MARKERS = {
     ".docx": "word/document.xml",
     ".pptx": "ppt/presentation.xml",
@@ -51,6 +52,10 @@ def validate_filename(raw: str | None) -> tuple[str, str]:
 def validate_content(data: bytes, extension: str) -> None:
     if not data:
         raise HTTPException(400, "Berkas kosong")
+    if extension in IMAGE_FORMATS:
+        signature = IMAGE_FORMATS[extension]
+        if not data.startswith(signature) or (extension == ".webp" and data[8:12] != b"WEBP"):
+            raise HTTPException(415, "Isi berkas tidak cocok dengan format gambar")
     if extension == ".pdf" and not data[:1024].lstrip().startswith(b"%PDF-"):
         raise HTTPException(415, "Isi berkas tidak cocok dengan format PDF")
     if extension in OFFICE_MARKERS:
@@ -87,6 +92,10 @@ def convert(data: bytes, extension: str) -> str:
         raise HTTPException(504, "Konversi melebihi batas waktu") from None
     if proc.returncode == 3:
         raise HTTPException(413, "Hasil konversi terlalu besar")
+    if proc.returncode == 4:
+        raise HTTPException(413, "Resolusi gambar melebihi 8 megapiksel")
+    if proc.returncode == 5:
+        raise HTTPException(415, "Gambar tidak valid atau formatnya tidak sesuai")
     if proc.returncode != 0:
         raise HTTPException(422, "Berkas tidak dapat dikonversi")
     if len(proc.stdout) > MAX_OUTPUT_BYTES:
