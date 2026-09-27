@@ -207,6 +207,12 @@ def test_pdf_preview_preserves_navigation_when_page_ocr_or_render_fails(monkeypa
     assert code == 0 and payload["image"].startswith("data:image/jpeg;base64,")
     assert payload["regions"] == [] and "OCR lokal" in payload["warning"]
 
+    monkeypatch.setattr(worker, "read_image_regions", lambda data, extension: (0, b'{"regions": []}'))
+    code, output = worker.read_pdf_preview(pdf, 1)
+    payload = json.loads(output)
+    assert code == 0 and payload["image"].startswith("data:image/jpeg;base64,")
+    assert payload["regions"] == [] and "tidak menemukan kotak" in payload["warning"]
+
 
 def test_pdf_uses_local_ocr_if_text_parser_fails(monkeypatch):
     from markitdown import MarkItDown

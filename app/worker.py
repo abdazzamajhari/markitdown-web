@@ -196,6 +196,8 @@ def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
             payload["warning"] = "Halaman ditampilkan, tetapi OCR lokal tidak berhasil memetakan kotak teks."
         else:
             payload["regions"] = json.loads(output)["regions"]
+            if not payload["regions"]:
+                payload["warning"] = "OCR lokal tidak menemukan kotak teks pada halaman ini. Coba lagi atau unggah halaman sebagai gambar."
     except (OSError, ValueError, subprocess.TimeoutExpired):
         payload["warning"] = "Halaman ini tidak dapat dirender. Coba lagi atau lanjut ke halaman berikutnya."
     return 0, json.dumps(payload, ensure_ascii=False).encode("utf-8")

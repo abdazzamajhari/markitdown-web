@@ -266,18 +266,26 @@ function renderDetail(item, markdown, engine) {
     legend.className = 'region-legend';
     legend.textContent = '▣ Kotak merah menandai tulisan pada halaman PDF. Klik kotak untuk membaca teks.';
     const scroll = document.createElement('div');
-    scroll.className = 'image-scroll';
+    scroll.className = 'image-scroll pdf-preview-scroll is-loading';
+    scroll.setAttribute('aria-busy', 'true');
     const frame = document.createElement('div');
     frame.className = 'image-frame';
+    frame.hidden = true;
     const image = document.createElement('img');
     image.alt = `Halaman PDF ${item.file.name}`;
+    image.hidden = true;
     const layer = document.createElement('div');
     layer.className = 'region-layer';
     frame.append(image, layer);
-    scroll.append(frame);
+    const previewStatus = document.createElement('div');
+    previewStatus.className = 'pdf-preview-status';
+    previewStatus.setAttribute('role', 'status');
+    previewStatus.setAttribute('aria-live', 'polite');
+    previewStatus.textContent = 'Memuat halaman 1 dan kotak OCR…';
+    scroll.append(frame, previewStatus);
     const regionMessage = document.createElement('p');
     regionMessage.className = 'region-message';
-    regionMessage.textContent = 'Buka detail untuk menampilkan halaman dan kotak OCR.';
+    regionMessage.textContent = 'Menunggu gambar dan hasil OCR halaman 1…';
     source.append(controls, legend, scroll, regionMessage);
     grid.append(source);
     let currentPage = 1, totalPages = 0, loading = false, loaded = false, previewUrl = null;
@@ -285,7 +293,15 @@ function renderDetail(item, markdown, engine) {
     const showPage = async (page, refresh = false) => {
       if (loading) return;
       loading = true;
+      let pendingUrl = null;
       previous.disabled = next.disabled = retry.disabled = true;
+      retry.hidden = true;
+      frame.hidden = true;
+      previewStatus.hidden = false;
+      previewStatus.classList.remove('is-error');
+      previewStatus.textContent = `Memuat halaman ${page} dan kotak OCR…`;
+      scroll.classList.add('is-loading');
+      scroll.setAttribute('aria-busy', 'true');
       regionMessage.textContent = `Memuat halaman ${page} dan kotak OCR…`;
       try {
         let payload = !refresh && pageCache.get(page);
@@ -302,39 +318,53 @@ function renderDetail(item, markdown, engine) {
             (payload.image !== null && !payload.image?.startsWith('data:image/jpeg;base64,'))) {
           throw new Error('Pratinjau PDF tidak valid');
         }
-        let nextUrl = null;
         if (payload.image) {
           const jpeg = Uint8Array.from(atob(payload.image.split(',', 2)[1]), character => character.charCodeAt(0));
-          nextUrl = URL.createObjectURL(new Blob([jpeg], {type: 'image/jpeg'}));
+          pendingUrl = URL.createObjectURL(new Blob([jpeg], {type: 'image/jpeg'}));
+          objectUrls.add(pendingUrl);
+          image.src = pendingUrl;
+          image.hidden = false;
+          await image.decode();
         }
         if (previewUrl) {
           URL.revokeObjectURL(previewUrl);
           objectUrls.delete(previewUrl);
         }
-        previewUrl = nextUrl;
-        if (previewUrl) { objectUrls.add(previewUrl); image.src = previewUrl; }
-        else image.removeAttribute('src');
+        previewUrl = pendingUrl;
+        pendingUrl = null;
+        if (!previewUrl) image.removeAttribute('src');
         image.hidden = !previewUrl;
         currentPage = payload.page;
         totalPages = payload.total_pages;
         pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
         showRegions(layer, payload.regions, regionMessage);
         if (payload.warning) regionMessage.textContent = payload.warning;
+        frame.hidden = !previewUrl;
+        previewStatus.hidden = !!previewUrl;
+        previewStatus.classList.toggle('is-error', !previewUrl);
+        if (!previewUrl) previewStatus.textContent = 'Halaman ini belum dapat ditampilkan.';
         retry.hidden = !payload.warning;
         if (!payload.warning) pageCache.set(page, payload);
         loaded = true;
       } catch (error) {
+        if (pendingUrl) { URL.revokeObjectURL(pendingUrl); objectUrls.delete(pendingUrl); }
+        if (previewUrl) { URL.revokeObjectURL(previewUrl); objectUrls.delete(previewUrl); previewUrl = null; }
+        image.removeAttribute('src'); image.hidden = true;
+        frame.hidden = true;
+        layer.replaceChildren();
         if (totalPages) {
           currentPage = page;
           pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
-          if (previewUrl) { URL.revokeObjectURL(previewUrl); objectUrls.delete(previewUrl); previewUrl = null; }
-          image.removeAttribute('src'); image.hidden = true;
-          layer.replaceChildren();
         }
+        previewStatus.hidden = false;
+        previewStatus.classList.add('is-error');
+        previewStatus.textContent = `Halaman ${page} belum dapat ditampilkan.`;
         retry.hidden = false;
         regionMessage.textContent = `${error.message}. Gunakan Coba lagi atau lanjut ke halaman berikutnya.`;
       } finally {
         loading = false;
+        scroll.classList.remove('is-loading');
+        scroll.setAttribute('aria-busy', 'false');
         previous.disabled = !loaded || currentPage <= 1;
         next.disabled = !loaded || currentPage >= totalPages;
         retry.disabled = false;
