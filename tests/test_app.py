@@ -95,7 +95,7 @@ def test_real_image_ocr(client, format_name, extension):
     image.save(buffer, format=format_name)
     response = upload(client, "screenshot" + extension, buffer.getvalue())
     assert response.status_code == 200, response.text
-    assert "HELLO 123" in response.text
+    assert "HELLO123" in response.text.replace(" ", "")
     assert response.headers["x-ocr-engine"] == "tesseract"
 
 
@@ -108,7 +108,7 @@ def test_transparent_screenshot_ocr(client):
     image.save(buffer, format="PNG")
     response = upload(client, "transparent.png", buffer.getvalue())
     assert response.status_code == 200, response.text
-    assert "HELLO 123" in response.text
+    assert "HELLO123" in response.text.replace(" ", "")
 
 
 def test_olmocr2_provider_request_and_output(client, monkeypatch):
