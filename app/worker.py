@@ -150,21 +150,35 @@ def render_pdf_page(data: bytes, page: int) -> bytes:
 def read_pdf_text(data: bytes) -> tuple[int, bytes]:
     from markitdown import MarkItDown
 
-    result = MarkItDown(enable_plugins=False).convert_stream(io.BytesIO(data), file_extension=".pdf")
-    markdown = (result.markdown or "").strip()
+    try:
+        result = MarkItDown(enable_plugins=False).convert_stream(io.BytesIO(data), file_extension=".pdf")
+        markdown = (result.markdown or "").strip()
+    except Exception:
+        # A readable scan may still confuse the PDF text parser. Try local OCR.
+        markdown = ""
     engine = "markitdown"
     if not markdown:
         pages = pdf_pages(data)
         if pages > MAX_SCANNED_PDF_PAGES:
             return 6, b""
         extracted = []
+        successful_pages = 0
         for page in range(1, pages + 1):
-            code, output = read_image_text(render_pdf_page(data, page), ".jpg")
-            if code:
+            try:
+                code, output = read_image_text(render_pdf_page(data, page), ".jpg")
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                code, output = 2, b""
+            if code == 3:
                 return code, b""
+            if code:
+                extracted.append(f"## Halaman {page}\n\n> OCR gagal membaca halaman ini. Coba ekspor halaman sebagai gambar.")
+                continue
+            successful_pages += 1
             extracted.append(f"## Halaman {page}\n\n{output.decode('utf-8').strip()}")
+        if not successful_pages:
+            return 2, b""
         markdown = "\n\n".join(extracted).strip()
-        engine = "tesseract-pdf"
+        engine = "tesseract-pdf-partial" if successful_pages < pages else "tesseract-pdf"
     return 0, json.dumps({"markdown": markdown, "engine": engine}, ensure_ascii=False).encode("utf-8")
 
 
@@ -172,14 +186,18 @@ def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
     pages = pdf_pages(data)
     if page < 1 or page > pages:
         return 7, b""
-    jpeg = render_pdf_page(data, page)
-    code, output = read_image_regions(jpeg, ".jpg")
-    if code:
-        return code, b""
-    regions = json.loads(output)["regions"]
     payload = {"engine": "tesseract", "page": page, "total_pages": pages,
-               "image": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii"),
-               "regions": regions}
+               "image": None, "regions": []}
+    try:
+        jpeg = render_pdf_page(data, page)
+        payload["image"] = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
+        code, output = read_image_regions(jpeg, ".jpg")
+        if code:
+            payload["warning"] = "Halaman ditampilkan, tetapi OCR lokal tidak berhasil memetakan kotak teks."
+        else:
+            payload["regions"] = json.loads(output)["regions"]
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        payload["warning"] = "Halaman ini tidak dapat dirender. Coba lagi atau lanjut ke halaman berikutnya."
     return 0, json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 

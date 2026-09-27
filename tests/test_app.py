@@ -1,6 +1,8 @@
 import base64
 import io
+import json
 import os
+import time
 import zipfile
 
 import httpx
@@ -9,6 +11,7 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw, ImageFont
 
 from app.main import MAX_REQUESTS_PER_MINUTE, app, recent_requests, region_requests, remote_requests, run_worker
+from app import worker
 
 
 @pytest.fixture
@@ -138,9 +141,9 @@ def test_image_region_positions_and_local_provenance(client, monkeypatch):
     assert client.post("/api/regions", content=b"not an image", headers={"X-Filename": "file.txt"}).status_code == 415
 
 
-def test_scanned_pdf_ocr_and_visible_boxes_on_each_page(client):
+def scanned_pdf(page_count=4):
     pages = []
-    for number in (1, 2):
+    for number in range(1, page_count + 1):
         image = Image.new("RGB", (900, 500), "white")
         ImageDraw.Draw(image).text(
             (55, 75), f"HALAMAN {number} TOTAL {number}25000",
@@ -149,21 +152,25 @@ def test_scanned_pdf_ocr_and_visible_boxes_on_each_page(client):
         pages.append(image)
     buffer = io.BytesIO()
     pages[0].save(buffer, format="PDF", save_all=True, append_images=pages[1:])
-    scanned = buffer.getvalue()
+    return buffer.getvalue()
+
+
+def test_scanned_pdf_ocr_and_visible_boxes_on_each_page(client):
+    scanned = scanned_pdf()
     response = upload(client, "faktur.pdf", scanned)
     assert response.status_code == 200, response.text
     assert response.headers["x-ocr-engine"] == "tesseract-pdf"
-    assert "Halaman 1" in response.text and "Halaman 2" in response.text
+    assert all(f"Halaman {page}" in response.text for page in range(1, 5))
     assert "125000" in response.text.replace(" ", "")
-    assert "225000" in response.text.replace(" ", "")
-    for page in (1, 2):
+    assert "425000" in response.text.replace(" ", "")
+    for page in range(1, 5):
         preview = client.post(
             f"/api/pdf-preview?page={page}", content=scanned,
             headers={"X-Filename": "faktur.pdf"},
         )
         assert preview.status_code == 200, preview.text[:100]
         result = preview.json()
-        assert (result["page"], result["total_pages"]) == (page, 2)
+        assert (result["page"], result["total_pages"]) == (page, 4)
         assert result["image"].startswith("data:image/jpeg;base64,")
         with Image.open(io.BytesIO(base64.b64decode(result["image"].split(",", 1)[1]))) as rendered:
             assert rendered.format == "JPEG"
@@ -171,8 +178,72 @@ def test_scanned_pdf_ocr_and_visible_boxes_on_each_page(client):
         assert str(page) in " ".join(region["text"] for region in result["regions"])
         assert all(0 <= region[key] <= 1 for region in result["regions"] for key in ("x", "y", "w", "h"))
         assert preview.headers["cache-control"] == "no-store"
-    assert client.post("/api/pdf-preview?page=3", content=scanned, headers={"X-Filename": "faktur.pdf"}).status_code == 400
+    assert client.post("/api/pdf-preview?page=5", content=scanned, headers={"X-Filename": "faktur.pdf"}).status_code == 400
     assert client.post("/api/pdf-preview", content=scanned, headers={"X-Filename": "faktur.txt"}).status_code == 415
+
+
+def test_pdf_preview_preserves_navigation_when_page_ocr_or_render_fails(monkeypatch):
+    pdf = scanned_pdf(4)
+    original_render = worker.render_pdf_page
+
+    def render_with_broken_page(data, page):
+        if page == 3:
+            raise ValueError("Unexpected page content")
+        return original_render(data, page)
+
+    monkeypatch.setattr(worker, "render_pdf_page", render_with_broken_page)
+    code, output = worker.read_pdf_preview(pdf, 3)
+    payload = json.loads(output)
+    assert code == 0
+    assert (payload["page"], payload["total_pages"]) == (3, 4)
+    assert payload["image"] is None and payload["regions"] == []
+    assert "berikutnya" in payload["warning"]
+    code, output = worker.read_pdf_preview(pdf, 4)
+    assert code == 0 and json.loads(output)["regions"]
+
+    monkeypatch.setattr(worker, "read_image_regions", lambda data, extension: (2, b""))
+    code, output = worker.read_pdf_preview(pdf, 2)
+    payload = json.loads(output)
+    assert code == 0 and payload["image"].startswith("data:image/jpeg;base64,")
+    assert payload["regions"] == [] and "OCR lokal" in payload["warning"]
+
+
+def test_pdf_uses_local_ocr_if_text_parser_fails(monkeypatch):
+    from markitdown import MarkItDown
+
+    def fail_pdf_parser(*args, **kwargs):
+        raise ValueError("PDF text parser failed")
+
+    monkeypatch.setattr(MarkItDown, "convert_stream", fail_pdf_parser)
+    code, output = worker.read_pdf_text(scanned_pdf(1))
+    payload = json.loads(output)
+    assert code == 0
+    assert payload["engine"] == "tesseract-pdf"
+    assert "125000" in payload["markdown"].replace(" ", "")
+
+
+def test_pdf_partial_ocr_marks_failed_page_and_keeps_other_pages(monkeypatch):
+    original_render = worker.render_pdf_page
+
+    def render_with_broken_page(data, page):
+        if page == 3:
+            raise ValueError("Unexpected page content")
+        return original_render(data, page)
+
+    monkeypatch.setattr(worker, "render_pdf_page", render_with_broken_page)
+    code, output = worker.read_pdf_text(scanned_pdf(4))
+    payload = json.loads(output)
+    assert code == 0 and payload["engine"] == "tesseract-pdf-partial"
+    assert "OCR gagal membaca halaman ini" in payload["markdown"]
+    assert "425000" in payload["markdown"].replace(" ", "")
+
+
+def test_preview_quota_explains_when_to_retry(client):
+    region_requests.extend([time.monotonic()] * 12)
+    response = client.post("/api/pdf-preview?page=1", content=scanned_pdf(1), headers={"X-Filename": "scan.pdf"})
+    assert response.status_code == 429
+    assert "detik" in response.json()["detail"]
+    assert int(response.headers["retry-after"]) > 0
 
 
 def test_sumopod_provider_request_and_output(client, monkeypatch):

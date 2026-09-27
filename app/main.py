@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import subprocess
@@ -114,6 +115,8 @@ def run_worker(data: bytes, extension: str, mode: str | None = None, timeout: in
         raise HTTPException(413, "PDF pindai melebihi batas 8 halaman OCR; pisahkan PDF lalu coba lagi")
     if proc.returncode == 7:
         raise HTTPException(400, "Nomor halaman PDF tidak tersedia")
+    if extension == ".pdf" and proc.returncode != 0:
+        raise HTTPException(422, "PDF tidak dapat dibaca atau diproses; periksa sandi dan coba pecah PDF menjadi berkas lebih kecil")
     if proc.returncode != 0:
         raise HTTPException(422, "Berkas tidak dapat dikonversi")
     return proc.stdout
@@ -131,7 +134,7 @@ def convert_pdf(data: bytes) -> tuple[str, str]:
     try:
         payload = json.loads(output)
         markdown, engine = payload["markdown"], payload["engine"]
-        if not isinstance(markdown, str) or engine not in {"markitdown", "tesseract-pdf"}:
+        if not isinstance(markdown, str) or engine not in {"markitdown", "tesseract-pdf", "tesseract-pdf-partial"}:
             raise ValueError
     except (KeyError, TypeError, ValueError):
         raise HTTPException(502, "Hasil konversi PDF tidak valid") from None
@@ -235,8 +238,11 @@ async def image_regions(request: Request):
         now = time.monotonic()
         while region_requests and region_requests[0] <= now - 60:
             region_requests.popleft()
-        if len(region_requests) >= 12 or slots.locked():
-            raise HTTPException(429, "Server sibuk; coba pratinjau lagi sebentar")
+        if len(region_requests) >= 12:
+            delay = max(1, math.ceil(60 - (now - region_requests[0])))
+            raise HTTPException(429, f"Batas pratinjau tercapai; coba lagi dalam {delay} detik", headers={"Retry-After": str(delay)})
+        if slots.locked():
+            raise HTTPException(429, "Server sedang memproses berkas lain; coba lagi sebentar", headers={"Retry-After": "3"})
         region_requests.append(now)
     async with slots:
         output = await run_in_threadpool(run_worker, bytes(data), extension, "regions")
@@ -270,8 +276,11 @@ async def pdf_preview(request: Request, page: int = 1):
         now = time.monotonic()
         while region_requests and region_requests[0] <= now - 60:
             region_requests.popleft()
-        if len(region_requests) >= 12 or slots.locked():
-            raise HTTPException(429, "Server sibuk; coba pratinjau lagi sebentar")
+        if len(region_requests) >= 12:
+            delay = max(1, math.ceil(60 - (now - region_requests[0])))
+            raise HTTPException(429, f"Batas pratinjau tercapai; coba lagi dalam {delay} detik", headers={"Retry-After": str(delay)})
+        if slots.locked():
+            raise HTTPException(429, "Server sedang memproses berkas lain; coba lagi sebentar", headers={"Retry-After": "3"})
         region_requests.append(now)
     async with slots:
         output = await run_in_threadpool(run_worker, bytes(data), extension, f"pdf-preview:{page}")

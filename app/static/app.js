@@ -259,7 +259,9 @@ function renderDetail(item, markdown, engine) {
     pageLabel.textContent = 'Halaman 1';
     const next = document.createElement('button');
     next.type = 'button'; next.textContent = 'Berikutnya →'; next.disabled = true;
-    controls.append(previous, pageLabel, next);
+    const retry = document.createElement('button');
+    retry.type = 'button'; retry.textContent = 'Coba lagi'; retry.hidden = true;
+    controls.append(previous, pageLabel, next, retry);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
     legend.textContent = '▣ Kotak merah menandai tulisan pada halaman PDF. Klik kotak untuk membaca teks.';
@@ -279,48 +281,71 @@ function renderDetail(item, markdown, engine) {
     source.append(controls, legend, scroll, regionMessage);
     grid.append(source);
     let currentPage = 1, totalPages = 0, loading = false, loaded = false, previewUrl = null;
-    const showPage = async (page) => {
+    const pageCache = new Map();
+    const showPage = async (page, refresh = false) => {
       if (loading) return;
       loading = true;
-      previous.disabled = next.disabled = true;
+      previous.disabled = next.disabled = retry.disabled = true;
       regionMessage.textContent = `Memuat halaman ${page} dan kotak OCR…`;
       try {
-        const response = await fetch(`/api/pdf-preview?page=${page}`, {
-          method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
-          body: item.file,
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-        if (!payload.image?.startsWith('data:image/jpeg;base64,') || !Number.isInteger(payload.total_pages)) {
+        let payload = !refresh && pageCache.get(page);
+        if (!payload) {
+          const response = await fetch(`/api/pdf-preview?page=${page}`, {
+            method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
+            body: item.file,
+          });
+          payload = await response.json();
+          if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+        }
+        if (payload.page !== page || !Number.isInteger(payload.total_pages) ||
+            payload.total_pages < page || !Array.isArray(payload.regions) ||
+            (payload.image !== null && !payload.image?.startsWith('data:image/jpeg;base64,'))) {
           throw new Error('Pratinjau PDF tidak valid');
         }
-        const jpeg = Uint8Array.from(atob(payload.image.split(',', 2)[1]), character => character.charCodeAt(0));
-        const nextUrl = URL.createObjectURL(new Blob([jpeg], {type: 'image/jpeg'}));
+        let nextUrl = null;
+        if (payload.image) {
+          const jpeg = Uint8Array.from(atob(payload.image.split(',', 2)[1]), character => character.charCodeAt(0));
+          nextUrl = URL.createObjectURL(new Blob([jpeg], {type: 'image/jpeg'}));
+        }
         if (previewUrl) {
           URL.revokeObjectURL(previewUrl);
           objectUrls.delete(previewUrl);
         }
         previewUrl = nextUrl;
-        objectUrls.add(previewUrl);
-        image.src = previewUrl;
+        if (previewUrl) { objectUrls.add(previewUrl); image.src = previewUrl; }
+        else image.removeAttribute('src');
+        image.hidden = !previewUrl;
         currentPage = payload.page;
         totalPages = payload.total_pages;
         pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
         showRegions(layer, payload.regions, regionMessage);
+        if (payload.warning) regionMessage.textContent = payload.warning;
+        retry.hidden = !payload.warning;
+        if (!payload.warning) pageCache.set(page, payload);
         loaded = true;
       } catch (error) {
-        regionMessage.textContent = `${error.message}. Coba klik halaman lagi atau tutup lalu buka detail.`;
+        if (totalPages) {
+          currentPage = page;
+          pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
+          if (previewUrl) { URL.revokeObjectURL(previewUrl); objectUrls.delete(previewUrl); previewUrl = null; }
+          image.removeAttribute('src'); image.hidden = true;
+          layer.replaceChildren();
+        }
+        retry.hidden = false;
+        regionMessage.textContent = `${error.message}. Gunakan Coba lagi atau lanjut ke halaman berikutnya.`;
       } finally {
         loading = false;
         previous.disabled = !loaded || currentPage <= 1;
         next.disabled = !loaded || currentPage >= totalPages;
+        retry.disabled = false;
       }
     };
     previous.addEventListener('click', () => void showPage(currentPage - 1));
     next.addEventListener('click', () => void showPage(currentPage + 1));
+    retry.addEventListener('click', () => void showPage(currentPage, true));
     loadRegions = async () => { if (!loaded) await showPage(1); };
   }
-  const engineLabel = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
+  const engineLabel = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
   const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
   const pre = document.createElement('pre');
   pre.className = 'transcript';
@@ -351,7 +376,7 @@ async function processQueue() {
       const {markdown, engine} = await upload(item);
       item.progress.value = 100;
       item.row.classList.add('done');
-      const label = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
+      const label = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
       item.state.textContent = markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       completed.push({name: item.file.name, markdown});
       emptyState.hidden = true;
