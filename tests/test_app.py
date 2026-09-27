@@ -15,9 +15,7 @@ from app.main import MAX_REQUESTS_PER_MINUTE, app, recent_requests, remote_reque
 def client(monkeypatch):
     recent_requests.clear()
     remote_requests.clear()
-    monkeypatch.delenv("CIRRASCALE_API_KEY", raising=False)
-    monkeypatch.delenv("HF_OLMOCR_ENDPOINT_URL", raising=False)
-    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
     return TestClient(app)
 
 
@@ -35,22 +33,11 @@ def test_health_and_home(client):
     assert "MarkItDown Web" in client.get("/").text
 
 
-def test_retired_provider_keys_never_claim_olmocr2(client, monkeypatch):
+def test_retired_provider_keys_do_not_enable_remote_ocr(client, monkeypatch):
     monkeypatch.setenv("DEEPINFRA_API_KEY", "obsolete-key")
     monkeypatch.setenv("CIRRASCALE_API_KEY", "old-key")
-    assert client.get("/api/capabilities").json() == {"image_ocr": "tesseract"}
-
-
-@pytest.mark.parametrize("url", [
-    "https://not-huggingface.example/v1",
-    "http://test.us-east-1.aws.endpoints.huggingface.cloud",
-    "https://test.us-east-1.aws.endpoints.huggingface.cloud.evil.test",
-    "https://test.us-east-1.aws.endpoints.huggingface.cloud:444/v1",
-    "https://test.us-east-1.aws.endpoints.huggingface.cloud/v1/chat/completions",
-])
-def test_olmocr_rejects_unsafe_endpoint(client, monkeypatch, url):
-    monkeypatch.setenv("HF_OLMOCR_ENDPOINT_URL", url)
-    monkeypatch.setenv("HF_TOKEN", "secret")
+    monkeypatch.setenv("HF_OLMOCR_ENDPOINT_URL", "https://test.us-east-1.aws.endpoints.huggingface.cloud")
+    monkeypatch.setenv("HF_TOKEN", "old-token")
     assert client.get("/api/capabilities").json() == {"image_ocr": "tesseract"}
 
 
@@ -132,16 +119,14 @@ def test_transparent_screenshot_ocr(client):
     assert "HELLO123" in response.text.replace(" ", "")
 
 
-def test_olmocr2_provider_request_and_output(client, monkeypatch):
-    monkeypatch.setenv("HF_OLMOCR_ENDPOINT_URL", "https://test.us-east-1.aws.endpoints.huggingface.cloud/v1/")
-    monkeypatch.setenv("HF_TOKEN", "server-only-test-key")
-    assert client.get("/api/capabilities").json() == {"image_ocr": "olmocr2"}
+def test_sumopod_provider_request_and_output(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "server-only-test-key")
+    assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "gpt-4o-mini"}
     seen = {}
 
     def fake_post(url, *, json, headers, timeout, follow_redirects):
         seen.update(url=url, body=json, headers=headers, timeout=timeout, redirects=follow_redirects)
-        return httpx.Response(200, json={"choices": [{"message": {"content":
-            "---\nprimary_language: en\nis_rotation_valid: true\n---\n\nHELLO 123"}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "HELLO 123"}}]})
 
     monkeypatch.setattr("app.main.httpx.post", fake_post)
     image = Image.new("RGB", (2000, 1000), "white")
@@ -150,19 +135,19 @@ def test_olmocr2_provider_request_and_output(client, monkeypatch):
     response = upload(client, "screenshot.png", buffer.getvalue())
     assert response.status_code == 200, response.text
     assert response.text == "HELLO 123"
-    assert response.headers["x-ocr-engine"] == "olmocr2"
-    assert seen["url"] == "https://test.us-east-1.aws.endpoints.huggingface.cloud/v1/chat/completions"
-    assert seen["body"]["model"] == "allenai/olmOCR-2-7B-1025-FP8"
+    assert response.headers["x-ocr-engine"] == "sumopod"
+    assert seen["url"] == "https://ai.sumopod.com/v1/chat/completions"
+    assert seen["body"]["model"] == "gpt-4o-mini"
     assert seen["headers"]["Authorization"] == "Bearer server-only-test-key"
     assert seen["redirects"] is False
+    assert seen["body"]["messages"][0]["content"][1]["image_url"]["detail"] == "high"
     encoded = seen["body"]["messages"][0]["content"][1]["image_url"]["url"].split(",", 1)[1]
     with Image.open(io.BytesIO(base64.b64decode(encoded))) as sent_image:
-        assert max(sent_image.size) == 1288
+        assert max(sent_image.size) == 2000
 
 
-def test_olmocr2_provider_error_does_not_fall_back(client, monkeypatch):
-    monkeypatch.setenv("HF_OLMOCR_ENDPOINT_URL", "https://test.us-east-1.aws.endpoints.huggingface.cloud")
-    monkeypatch.setenv("HF_TOKEN", "server-only-test-key")
+def test_sumopod_provider_error_does_not_fall_back(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "server-only-test-key")
     monkeypatch.setattr("app.main.httpx.post", lambda *a, **k: httpx.Response(401, text="secret provider body"))
     image = Image.new("RGB", (100, 100), "white")
     buffer = io.BytesIO()
@@ -172,11 +157,11 @@ def test_olmocr2_provider_error_does_not_fall_back(client, monkeypatch):
     assert "secret provider body" not in response.text
 
 
-def test_olmocr2_prepares_photo_without_truncating_it():
+def test_vision_prepares_photo_without_truncating_it():
     image = Image.frombytes("RGB", (1288, 1288), os.urandom(1288 * 1288 * 3))
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=60)
-    prepared = run_worker(buffer.getvalue(), ".jpg", "prepare-olmocr", timeout=20)
+    prepared = run_worker(buffer.getvalue(), ".jpg", "prepare-vision", timeout=20)
     assert 2 * 1024 * 1024 < len(prepared) < 10 * 1024 * 1024
     with Image.open(io.BytesIO(prepared)) as converted:
         assert converted.format == "PNG"
@@ -194,11 +179,10 @@ def test_public_quota(client, monkeypatch):
     assert upload(client, "a.txt", b"hi").status_code == 429
 
 
-def test_olmocr2_hourly_quota(client, monkeypatch):
-    monkeypatch.setenv("HF_OLMOCR_ENDPOINT_URL", "https://test.us-east-1.aws.endpoints.huggingface.cloud")
-    monkeypatch.setenv("HF_TOKEN", "server-only-test-key")
+def test_sumopod_hourly_quota(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "server-only-test-key")
     monkeypatch.setattr("app.main.MAX_REQUESTS_PER_MINUTE", 100)
-    monkeypatch.setattr("app.main.convert_olmocr", lambda data, extension: "ok")
+    monkeypatch.setattr("app.main.convert_sumopod", lambda data, extension: "ok")
     for _ in range(30):
         assert upload(client, "a.png", b"\x89PNG\r\n\x1a\nmock").status_code == 200
     assert upload(client, "a.png", b"\x89PNG\r\n\x1a\nmock").status_code == 429

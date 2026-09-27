@@ -114,7 +114,7 @@ async function processQueue() {
       const {markdown, engine} = await upload(item);
       item.progress.value = 100;
       item.row.classList.add('done');
-      const label = engine === 'olmocr2' ? 'olmOCR 2' : engine === 'tesseract' ? 'OCR lokal' : 'MarkItDown';
+      const label = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract' ? 'OCR lokal' : 'MarkItDown';
       item.state.textContent = markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) — tidak ada teks terdeteksi`;
       if (markdown.trim()) {
         const actions = document.createElement('div');
@@ -171,9 +171,9 @@ window.addEventListener('pagehide', () => {
 
 fetch('/api/capabilities', {cache: 'no-store'})
   .then((response) => response.json())
-  .then(({image_ocr}) => {
-    ocrMode.textContent = image_ocr === 'olmocr2'
-      ? 'olmOCR 2 terkonfigurasi melalui Hugging Face Inference Endpoint. Gambar dikirim ke endpoint tersebut; berkas lain tetap diproses di server ini.'
+  .then(({image_ocr, image_ocr_model}) => {
+    ocrMode.textContent = image_ocr === 'sumopod'
+      ? `OCR AI terkonfigurasi melalui SumoPod (${image_ocr_model}). Gambar dikirim ke SumoPod; berkas lain tetap diproses di server ini.`
       : 'OCR lokal aktif untuk gambar bahasa Indonesia dan Inggris. Gambar tidak dikirim ke penyedia AI.';
   })
   .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });

@@ -9,7 +9,7 @@ IMAGE_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WE
 MAX_IMAGE_PIXELS = 8_000_000
 
 
-def prepare_image(data: bytes, extension: str, for_olmocr: bool = False) -> tuple[int, bytes]:
+def prepare_image(data: bytes, extension: str, for_vision: bool = False) -> tuple[int, bytes]:
     from PIL import Image, ImageOps, UnidentifiedImageError
 
     Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
@@ -24,10 +24,10 @@ def prepare_image(data: bytes, extension: str, for_olmocr: bool = False) -> tupl
                 with oriented.convert("RGBA") as rgba:
                     with Image.new("RGB", rgba.size, "white") as rgb:
                         rgb.paste(rgba, mask=rgba.getchannel("A"))
-                        if for_olmocr:
-                            rgb.thumbnail((1288, 1288), Image.Resampling.LANCZOS)
+                        if for_vision:
+                            rgb.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
                         target = rgb
-                        if not for_olmocr and max(rgb.size) < 1000:
+                        if not for_vision and max(rgb.size) < 1000:
                             scale = 1000 / max(rgb.size)
                             target = rgb.resize((round(rgb.width * scale), round(rgb.height * scale)), Image.Resampling.LANCZOS)
                         image_bytes = io.BytesIO()
@@ -82,8 +82,8 @@ def main() -> int:
     try:
         data = sys.stdin.buffer.read(10 * 1024 * 1024 + 1)
         if extension in IMAGE_EXTENSIONS:
-            if len(sys.argv) > 2 and sys.argv[2] == "prepare-olmocr":
-                code, output = prepare_image(data, extension, for_olmocr=True)
+            if len(sys.argv) > 2 and sys.argv[2] == "prepare-vision":
+                code, output = prepare_image(data, extension, for_vision=True)
             else:
                 code, output = read_image_text(data, extension)
             if code:
@@ -95,7 +95,7 @@ def main() -> int:
                 io.BytesIO(data), file_extension=extension,
             )
             output = (result.markdown or "").encode("utf-8")
-        output_limit = 10 * 1024 * 1024 if len(sys.argv) > 2 and sys.argv[2] == "prepare-olmocr" else 2 * 1024 * 1024
+        output_limit = 10 * 1024 * 1024 if len(sys.argv) > 2 and sys.argv[2] == "prepare-vision" else 2 * 1024 * 1024
         if len(output) > output_limit:
             return 3
         sys.stdout.buffer.write(output)

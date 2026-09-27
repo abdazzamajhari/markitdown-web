@@ -11,7 +11,7 @@ import zipfile
 from collections import deque
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -32,12 +32,13 @@ MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 MAX_REQUESTS_PER_MINUTE = 12
 MAX_REMOTE_REQUESTS_PER_HOUR = 30
-OLMOCR_MODEL = "allenai/olmOCR-2-7B-1025-FP8"
-OLMOCR_PROMPT = (
-    "Attached is one document image. Transcribe all readable text in natural order. "
-    "Represent tables as HTML and equations as LaTeX. Do not invent text. "
-    "Return Markdown with YAML front matter for primary_language, is_rotation_valid, "
-    "rotation_correction, is_table, and is_diagram."
+SUMOPOD_URL = "https://ai.sumopod.com/v1/chat/completions"
+SUMOPOD_MODEL = "gpt-4o-mini"
+OCR_PROMPT = (
+    "Transcribe all text visible in this document image or screenshot, in natural reading order. "
+    "Keep the original language, spelling, numbers, and line structure. "
+    "Represent tables in Markdown. Do not summarize, translate, describe the image, or invent missing text. "
+    "Return only the transcription as Markdown; if there is no readable text, return an empty response."
 )
 
 app = FastAPI(title="MarkItDown Web", version="1.0.0", docs_url=None, redoc_url=None)
@@ -45,23 +46,6 @@ slots = asyncio.Semaphore(1)
 quota_lock = asyncio.Lock()
 recent_requests: deque[float] = deque()
 remote_requests: deque[float] = deque()
-
-
-def olmocr_endpoint() -> str | None:
-    """Only send the server-side Hugging Face token to a dedicated HF endpoint."""
-    url = os.environ.get("HF_OLMOCR_ENDPOINT_URL", "").strip().rstrip("/")
-    if not url or not os.environ.get("HF_TOKEN", "").strip():
-        return None
-    try:
-        parts = urlsplit(url)
-        if (parts.scheme != "https" or not parts.hostname or
-            not parts.hostname.endswith(".endpoints.huggingface.cloud") or
-            parts.username or parts.password or parts.port or parts.query or parts.fragment or
-            parts.path not in {"", "/v1"}):
-            return None
-    except ValueError:
-        return None
-    return url.removesuffix("/v1") + "/v1/chat/completions"
 
 
 def validate_filename(raw: str | None) -> tuple[str, str]:
@@ -136,52 +120,52 @@ def convert(data: bytes, extension: str) -> str:
     return output.decode("utf-8")
 
 
-def convert_olmocr(data: bytes, extension: str) -> str:
-    endpoint = olmocr_endpoint()
-    if endpoint is None:
-        raise HTTPException(503, "Endpoint olmOCR 2 Hugging Face belum dikonfigurasi")
+def convert_sumopod(data: bytes, extension: str) -> str:
+    key = os.environ.get("SUMOPOD_API_KEY", "").strip()
+    if not key:
+        raise HTTPException(503, "Kunci SumoPod belum dikonfigurasi")
     # Decode untrusted images in the constrained worker; the provider key stays in this process.
-    png = run_worker(data, extension, "prepare-olmocr", timeout=20)
+    png = run_worker(data, extension, "prepare-vision", timeout=20)
     if len(png) > MAX_BYTES:
-        raise HTTPException(413, "Gambar terlalu besar untuk olmOCR 2")
+        raise HTTPException(413, "Gambar terlalu besar untuk OCR AI")
     payload = {
-        "model": OLMOCR_MODEL,
+        "model": SUMOPOD_MODEL,
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": OLMOCR_PROMPT},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}},
+            {"type": "text", "text": OCR_PROMPT},
+            {"type": "image_url", "image_url": {
+                "url": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
+                "detail": "high",
+            }},
         ]}],
-        "temperature": 0.1,
+        "temperature": 0,
         "max_tokens": 4096,
         "stream": False,
     }
     try:
         result = httpx.post(
-            endpoint, json=payload,
-            headers={"Authorization": "Bearer " + os.environ["HF_TOKEN"].strip()},
+            SUMOPOD_URL, json=payload,
+            headers={"Authorization": "Bearer " + key},
             timeout=80, follow_redirects=False,
         )
     except httpx.HTTPError:
-        raise HTTPException(502, "olmOCR 2 tidak dapat dihubungi") from None
+        raise HTTPException(502, "SumoPod tidak dapat dihubungi") from None
     if result.status_code in {401, 403}:
-        raise HTTPException(503, "Kunci layanan olmOCR 2 tidak valid")
+        raise HTTPException(503, "Kunci SumoPod tidak valid atau tidak diizinkan")
     if result.status_code == 429:
-        raise HTTPException(503, "Kuota layanan olmOCR 2 tercapai; coba lagi nanti")
-    if result.status_code == 502:
-        raise HTTPException(503, "Endpoint Hugging Face sedang memulai atau bermasalah; coba lagi nanti")
+        raise HTTPException(503, "Batas pemakaian SumoPod tercapai; coba lagi nanti")
     if result.status_code != 200:
-        raise HTTPException(502, f"Penyedia olmOCR 2 mengembalikan HTTP {result.status_code}")
+        raise HTTPException(502, f"SumoPod mengembalikan HTTP {result.status_code}")
     if len(result.content) > MAX_OUTPUT_BYTES + 65536:
-        raise HTTPException(502, "Jawaban olmOCR 2 terlalu besar")
+        raise HTTPException(502, "Jawaban SumoPod terlalu besar")
     try:
         markdown = result.json()["choices"][0]["message"]["content"]
         if not isinstance(markdown, str):
             raise ValueError
     except (KeyError, IndexError, TypeError, ValueError):
-        raise HTTPException(502, "Jawaban olmOCR 2 tidak valid") from None
-    # The model's front matter describes the image; only return its transcription.
-    markdown = re.sub(r"\A\s*---\s*\n.*?\n---\s*\n", "", markdown, count=1, flags=re.DOTALL).strip()
+        raise HTTPException(502, "Jawaban SumoPod tidak valid") from None
+    markdown = markdown.strip()
     if not markdown:
-        raise HTTPException(422, "olmOCR 2 tidak menemukan teks pada gambar")
+        raise HTTPException(422, "OCR AI tidak menemukan teks pada gambar")
     output = markdown.encode("utf-8")
     if len(output) > MAX_OUTPUT_BYTES:
         raise HTTPException(413, "Hasil konversi terlalu besar")
@@ -195,7 +179,9 @@ async def health():
 
 @app.get("/api/capabilities")
 async def capabilities():
-    return {"image_ocr": "olmocr2" if olmocr_endpoint() else "tesseract"}
+    if os.environ.get("SUMOPOD_API_KEY", "").strip():
+        return {"image_ocr": "sumopod", "image_ocr_model": SUMOPOD_MODEL}
+    return {"image_ocr": "tesseract"}
 
 
 @app.get("/", include_in_schema=False)
@@ -229,19 +215,19 @@ async def convert_file(request: Request):
             recent_requests.popleft()
         while remote_requests and remote_requests[0] <= now - 3600:
             remote_requests.popleft()
-        use_olmocr = extension in IMAGE_FORMATS and bool(olmocr_endpoint())
+        use_sumopod = extension in IMAGE_FORMATS and bool(os.environ.get("SUMOPOD_API_KEY", "").strip())
         if len(recent_requests) >= MAX_REQUESTS_PER_MINUTE:
             raise HTTPException(429, "Batas konversi sementara tercapai; coba lagi sebentar")
-        if use_olmocr and len(remote_requests) >= MAX_REMOTE_REQUESTS_PER_HOUR:
-            raise HTTPException(429, "Batas olmOCR 2 per jam tercapai; coba lagi nanti")
+        if use_sumopod and len(remote_requests) >= MAX_REMOTE_REQUESTS_PER_HOUR:
+            raise HTTPException(429, "Batas OCR AI per jam tercapai; coba lagi nanti")
         if slots.locked():
             raise HTTPException(429, "Server sibuk; coba lagi sebentar")
         recent_requests.append(now)
-        if use_olmocr:
+        if use_sumopod:
             remote_requests.append(now)
     async with slots:
-        if use_olmocr:
-            markdown = await run_in_threadpool(convert_olmocr, bytes(data), extension)
+        if use_sumopod:
+            markdown = await run_in_threadpool(convert_sumopod, bytes(data), extension)
         else:
             markdown = await run_in_threadpool(convert, bytes(data), extension)
     safe_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(name).stem)[:80] or "document"
@@ -252,7 +238,7 @@ async def convert_file(request: Request):
             "Content-Disposition": f'attachment; filename="{safe_stem}.md"',
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
-            "X-OCR-Engine": "olmocr2" if use_olmocr else ("tesseract" if extension in IMAGE_FORMATS else "markitdown"),
+            "X-OCR-Engine": "sumopod" if use_sumopod else ("tesseract" if extension in IMAGE_FORMATS else "markitdown"),
         },
     )
 
