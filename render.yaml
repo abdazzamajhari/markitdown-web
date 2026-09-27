@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: markitdown-web
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: WEB_API_KEY
+        sync: false

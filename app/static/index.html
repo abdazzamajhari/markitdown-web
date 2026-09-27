@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>MarkItDown Web</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <main class="wrap">
+    <header><span class="mark">M↓</span><div><h1>MarkItDown Web</h1><p>Ubah dokumen menjadi Markdown untuk analisis teks.</p></div></header>
+    <form id="form">
+      <label for="key">Kunci akses</label>
+      <input id="key" type="password" autocomplete="off" required placeholder="Masukkan WEB_API_KEY">
+      <label for="file">Pilih dokumen (maksimum 10 MB)</label>
+      <input id="file" type="file" accept=".pdf,.docx,.pptx,.xlsx,.txt,.csv,.json" required>
+      <small>PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON. Berkas teks menggunakan UTF-8.</small>
+      <button id="submit" type="submit">Konversi ke Markdown</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+    <section id="result" hidden>
+      <div class="result-head"><h2>Hasil</h2><a id="download" download="document.md">Unduh .md</a></div>
+      <pre id="preview"></pre>
+    </section>
+    <footer>Berkas diproses dalam memori dan tidak disimpan oleh aplikasi. Gunakan HTTPS pada layanan publik.</footer>
+  </main>
+</body>
+</html>
