@@ -278,7 +278,7 @@ function renderDetail(item, markdown, engine) {
     regionMessage.textContent = 'Buka detail untuk menampilkan halaman dan kotak OCR.';
     source.append(controls, legend, scroll, regionMessage);
     grid.append(source);
-    let currentPage = 1, totalPages = 0, loading = false, loaded = false;
+    let currentPage = 1, totalPages = 0, loading = false, loaded = false, previewUrl = null;
     const showPage = async (page) => {
       if (loading) return;
       loading = true;
@@ -294,7 +294,15 @@ function renderDetail(item, markdown, engine) {
         if (!payload.image?.startsWith('data:image/jpeg;base64,') || !Number.isInteger(payload.total_pages)) {
           throw new Error('Pratinjau PDF tidak valid');
         }
-        image.src = payload.image;
+        const jpeg = Uint8Array.from(atob(payload.image.split(',', 2)[1]), character => character.charCodeAt(0));
+        const nextUrl = URL.createObjectURL(new Blob([jpeg], {type: 'image/jpeg'}));
+        if (previewUrl) {
+          URL.revokeObjectURL(previewUrl);
+          objectUrls.delete(previewUrl);
+        }
+        previewUrl = nextUrl;
+        objectUrls.add(previewUrl);
+        image.src = previewUrl;
         currentPage = payload.page;
         totalPages = payload.total_pages;
         pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
@@ -324,7 +332,7 @@ function renderDetail(item, markdown, engine) {
   note.textContent = imageFormats.has(item.extension)
     ? 'Kotak dan teks per area berasal dari Tesseract lokal. Hasil Markdown di sebelahnya berasal dari mesin yang tertera dan belum disejajarkan dengan kotak secara otomatis.'
     : item.extension === 'pdf'
-      ? 'Klik nama halaman untuk menelusuri hasil OCR per halaman. Kotak dibuat oleh Tesseract lokal; pada PDF dengan lapisan teks, Markdown berasal dari MarkItDown sehingga keduanya dapat berbeda.'
+      ? 'Gunakan tombol Sebelumnya/Berikutnya untuk menelusuri halaman. Kotak dibuat oleh Tesseract lokal; pada PDF dengan lapisan teks, Markdown berasal dari MarkItDown sehingga keduanya dapat berbeda.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
   details.append(summary, grid, note);
   if (loadRegions) details.addEventListener('toggle', () => { if (details.open) void loadRegions(); });
