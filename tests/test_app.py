@@ -138,6 +138,43 @@ def test_image_region_positions_and_local_provenance(client, monkeypatch):
     assert client.post("/api/regions", content=b"not an image", headers={"X-Filename": "file.txt"}).status_code == 415
 
 
+def test_scanned_pdf_ocr_and_visible_boxes_on_each_page(client):
+    pages = []
+    for number in (1, 2):
+        image = Image.new("RGB", (900, 500), "white")
+        ImageDraw.Draw(image).text(
+            (55, 75), f"HALAMAN {number} TOTAL {number}25000",
+            font=ImageFont.load_default(size=65), fill="black",
+        )
+        pages.append(image)
+    buffer = io.BytesIO()
+    pages[0].save(buffer, format="PDF", save_all=True, append_images=pages[1:])
+    scanned = buffer.getvalue()
+    response = upload(client, "faktur.pdf", scanned)
+    assert response.status_code == 200, response.text
+    assert response.headers["x-ocr-engine"] == "tesseract-pdf"
+    assert "Halaman 1" in response.text and "Halaman 2" in response.text
+    assert "125000" in response.text.replace(" ", "")
+    assert "225000" in response.text.replace(" ", "")
+    for page in (1, 2):
+        preview = client.post(
+            f"/api/pdf-preview?page={page}", content=scanned,
+            headers={"X-Filename": "faktur.pdf"},
+        )
+        assert preview.status_code == 200, preview.text[:100]
+        result = preview.json()
+        assert (result["page"], result["total_pages"]) == (page, 2)
+        assert result["image"].startswith("data:image/jpeg;base64,")
+        with Image.open(io.BytesIO(base64.b64decode(result["image"].split(",", 1)[1]))) as rendered:
+            assert rendered.format == "JPEG"
+        assert result["regions"]
+        assert str(page) in " ".join(region["text"] for region in result["regions"])
+        assert all(0 <= region[key] <= 1 for region in result["regions"] for key in ("x", "y", "w", "h"))
+        assert preview.headers["cache-control"] == "no-store"
+    assert client.post("/api/pdf-preview?page=3", content=scanned, headers={"X-Filename": "faktur.pdf"}).status_code == 400
+    assert client.post("/api/pdf-preview", content=scanned, headers={"X-Filename": "faktur.txt"}).status_code == 415
+
+
 def test_sumopod_provider_request_and_output(client, monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "server-only-test-key")
     assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "gpt-4o-mini"}

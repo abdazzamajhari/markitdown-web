@@ -6,13 +6,15 @@ Aplikasi web mandiri untuk mengonversi dokumen ke Markdown menggunakan [microsof
 
 - Seret banyak berkas ke area unggah **atau bagian lain halaman**: antrean diproses berurutan, dengan progres unggah dan status OCR/konversi. Klik area unggah untuk memilih berkas di perangkat tanpa drag and drop.
 - Halaman awal menampilkan **ilustrasi contoh** kotak OCR yang dapat diklik. Setelah gambar berhasil dikonversi, detail gambar sumber dan transkripsi **terbuka otomatis**; kotak OCR dimuat sebelum berkas berikutnya diproses. Tombol **Perbesar gambar** membantu memeriksa tulisan kecil. Kotak dan teks per area dihitung menggunakan **Tesseract lokal** melalui `POST /api/regions`; transkripsi utama tetap dihasilkan oleh mesin yang disebut pada hasil (SumoPod atau Tesseract). Keduanya **tidak disejajarkan secara otomatis** dan kotak dapat tidak lengkap meskipun transkripsi SumoPod membaca teks lain. Jika OCR lokal tidak menemukan area, halaman menyebutkannya secara eksplisit, tanpa membuat kotak palsu pada hasil unggahan.
+- Untuk **PDF hasil pindai**, aplikasi mengubah halaman menjadi gambar dan menjalankan OCR lokal bila PDF tidak memiliki teks yang dapat diekstraksi. Setelah konversi, klik **Lihat detail teks yang diekstraksi**: halaman pertama dan kotak merah OCR muncul otomatis di sebelah Markdown. Tombol **Sebelumnya/Berikutnya** memuat halaman lain, dan kotak dapat diklik untuk membaca teks per area. PDF dengan lapisan teks tetap memakai MarkItDown untuk hasil Markdown; kotak pratinjau selalu berasal dari OCR lokal sehingga hasilnya dapat berbeda.
 - Unduh `.md` per berkas, **semua `.md` dalam satu ZIP**, atau **satu `.md` gabungan**. ZIP dibuat di browser dari hasil yang sudah diterima; berkas gagal tidak dimasukkan. Hasil kosong yang berhasil diproses menghasilkan `.md` kosong. Periksa hasil sebelum digunakan sebagai data penelitian atau dokumen resmi.
 - Endpoint `POST /api/convert` tetap menerima satu berkas per permintaan; antarmuka mengirimnya satu per satu.
 - `POST /api/regions` menerima berkas gambar biner dengan header `X-Filename` yang sama dan mengembalikan `{"engine":"tesseract","regions":[{"x":0.1,"y":0.2,"w":0.3,"h":0.04,"text":"..."}]}`. Koordinat dinormalisasi terhadap gambar berorientasi benar yang diproses worker. Endpoint dipanggil otomatis setelah gambar berhasil dikonversi, memakai kuota terpisah 12 pratinjau per menit per instans, dan tidak mengirim gambar ke SumoPod. Detail dapat ditutup dan dibuka ulang untuk mencoba kembali bila pemetaan awal gagal.
+- `POST /api/pdf-preview?page=1` menerima body PDF dan `X-Filename`; respons memuat `page`, `total_pages`, gambar JPEG halaman sebagai data URL, serta `regions` Tesseract dengan koordinat relatif. Saat detail PDF dibuka, halaman pertama langsung dimuat; tombol navigasi memuat halaman sesuai permintaan. Pratinjau gambar dan PDF berbagi kuota 12 per menit per instans.
 - Format: PNG, JPG/JPEG, WebP, PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON. Maksimum 10 MB per berkas, 8 megapiksel per gambar, dan 2 MB hasil Markdown.
 - Gambar statis diproses dengan Tesseract OCR lokal (bahasa Indonesia dan Inggris) secara default. Jika `SUMOPOD_API_KEY` diatur, gambar dikirim ke SumoPod untuk ditranskripsikan dengan model vision `gpt-4o-mini`. Halaman menampilkan konfigurasi OCR dan mesin yang digunakan per hasil. Konfigurasi Hugging Face, DeepInfra, dan Cirrascale lama tidak digunakan.
 - Akses publik tanpa kunci pengguna; berkas tidak ditulis ke penyimpanan permanen. Worker terpisah dibatasi waktu 30 detik, CPU 25 detik, dan ruang alamat 1 GiB (Linux). Hasil unduhan massal dirakit sementara di memori browser; muat ulang halaman akan menghapus daftar hasilnya.
-- Tidak menerima URL, path server, HTML, ZIP, atau plugin dari pengguna. PDF berbasis gambar tanpa lapisan teks masih dapat menghasilkan teks kosong; OCR saat ini berlaku untuk berkas gambar, bukan halaman PDF hasil pindai atau gambar yang tertanam dalam dokumen.
+- Tidak menerima URL, path server, HTML, ZIP, atau plugin dari pengguna. OCR PDF pindai dibatasi hingga **8 halaman** per berkas untuk menjaga waktu proses; PDF pindai yang lebih panjang ditolak dengan pesan untuk memisahkannya. PDF berlapis teks yang terbaca MarkItDown tidak terkena batas halaman OCR. Gambar yang tertanam dalam DOCX/PPTX belum di-OCR.
 - Maksimum satu proses konversi aktif dan 12 konversi per menit per instans. Permintaan selebihnya mendapat HTTP 429. Batas ini tidak menggantikan pembatasan trafik di tepi jaringan; untuk beban tinggi perlu antrian kerja dan pengaturan kapasitas terpisah.
 - Jika SumoPod terkonfigurasi, dibatasi lagi menjadi 30 permintaan gambar per jam per instans. Ini bukan batas biaya yang kuat karena hitungan di-reset saat proses dimulai ulang; tetapkan batas belanja pada kunci API SumoPod sebelum membuka layanan publik.
 
@@ -27,7 +29,7 @@ pip install -r requirements-dev.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Instal Tesseract dengan paket bahasa `eng` dan `ind` sebelum menjalankan aplikasi (contoh Debian/Ubuntu: `sudo apt-get install tesseract-ocr tesseract-ocr-eng tesseract-ocr-ind`). Buka <http://127.0.0.1:8000>.
+Instal Tesseract dengan paket bahasa `eng` dan `ind` serta Poppler sebelum menjalankan aplikasi (contoh Debian/Ubuntu: `sudo apt-get install tesseract-ocr tesseract-ocr-eng tesseract-ocr-ind poppler-utils`). Buka <http://127.0.0.1:8000>.
 
 Docker:
 
@@ -58,6 +60,15 @@ curl -f -X POST 'http://127.0.0.1:8000/api/regions' \
   --data-binary '@screenshot.png'
 ```
 
+Contoh mengambil halaman dan kotak OCR PDF:
+
+```bash
+curl -f -X POST 'http://127.0.0.1:8000/api/pdf-preview?page=1' \
+  -H 'X-Filename: faktur.pdf' \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary '@faktur.pdf'
+```
+
 ## Mengaktifkan OCR AI (SumoPod)
 
 Layanan ini menggunakan endpoint OpenAI-compatible `https://ai.sumopod.com/v1/chat/completions` dan model `gpt-4o-mini` untuk gambar. Ini adalah OCR berbasis model vision, **bukan olmOCR 2**.
@@ -85,4 +96,4 @@ pip install -r requirements-dev.txt
 pytest -q
 ```
 
-Workflow GitHub Actions memasang Tesseract, menjalankan pengujian OCR dan dokumen, lalu membangun Docker pada push dan pull request. Bilah progres menampilkan persentase pengiriman berkas; saat konversi berlangsung bilah bergerak tanpa persentase karena backend OCR tidak melaporkan kemajuan parsial. Terapkan batas request di reverse proxy, pemantauan memori/CPU, dan pembatasan trafik per IP sebelum membuka layanan untuk publik berskala besar. Kuota dalam aplikasi berlaku per instans dan di-reset saat proses dimulai ulang. Batas waktu dan memori worker bukan isolasi keamanan setara sandbox kernel; jalankan container tanpa hak istimewa dan tanpa mount rahasia. Upgrade dependensi secara berkala dan jalankan CI sebelum rilis.
+Workflow GitHub Actions memasang Tesseract dan Poppler, menjalankan pengujian OCR dan dokumen, lalu membangun Docker pada push dan pull request. Bilah progres menampilkan persentase pengiriman berkas; saat konversi berlangsung bilah bergerak tanpa persentase karena backend OCR tidak melaporkan kemajuan parsial. Terapkan batas request di reverse proxy, pemantauan memori/CPU, dan pembatasan trafik per IP sebelum membuka layanan untuk publik berskala besar. Kuota dalam aplikasi berlaku per instans dan di-reset saat proses dimulai ulang. Batas waktu dan memori worker bukan isolasi keamanan setara sandbox kernel; jalankan container tanpa hak istimewa dan tanpa mount rahasia. Upgrade dependensi secara berkala dan jalankan CI sebelum rilis.

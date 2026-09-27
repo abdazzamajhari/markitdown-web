@@ -110,6 +110,10 @@ def run_worker(data: bytes, extension: str, mode: str | None = None, timeout: in
         raise HTTPException(413, "Resolusi gambar melebihi 8 megapiksel")
     if proc.returncode == 5:
         raise HTTPException(415, "Gambar tidak valid atau formatnya tidak sesuai")
+    if proc.returncode == 6:
+        raise HTTPException(413, "PDF pindai melebihi batas 8 halaman OCR; pisahkan PDF lalu coba lagi")
+    if proc.returncode == 7:
+        raise HTTPException(400, "Nomor halaman PDF tidak tersedia")
     if proc.returncode != 0:
         raise HTTPException(422, "Berkas tidak dapat dikonversi")
     return proc.stdout
@@ -120,6 +124,20 @@ def convert(data: bytes, extension: str) -> str:
     if len(output) > MAX_OUTPUT_BYTES:
         raise HTTPException(413, "Hasil konversi terlalu besar")
     return output.decode("utf-8")
+
+
+def convert_pdf(data: bytes) -> tuple[str, str]:
+    output = run_worker(data, ".pdf", "pdf-convert")
+    try:
+        payload = json.loads(output)
+        markdown, engine = payload["markdown"], payload["engine"]
+        if not isinstance(markdown, str) or engine not in {"markitdown", "tesseract-pdf"}:
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(502, "Hasil konversi PDF tidak valid") from None
+    if len(markdown.encode("utf-8")) > MAX_OUTPUT_BYTES:
+        raise HTTPException(413, "Hasil konversi terlalu besar")
+    return markdown, engine
 
 
 def convert_sumopod(data: bytes, extension: str) -> str:
@@ -231,6 +249,41 @@ async def image_regions(request: Request):
     return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/pdf-preview")
+async def pdf_preview(request: Request, page: int = 1):
+    """Render one PDF page and return visible local OCR regions on that page."""
+    _, extension = validate_filename(request.headers.get("x-filename"))
+    if extension != ".pdf":
+        raise HTTPException(415, "Pratinjau halaman hanya tersedia untuk PDF")
+    if page < 1 or page > 10000:
+        raise HTTPException(400, "Nomor halaman PDF tidak tersedia")
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > MAX_BYTES:
+        raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > MAX_BYTES:
+            raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
+        data.extend(chunk)
+    validate_content(data, extension)
+    async with quota_lock:
+        now = time.monotonic()
+        while region_requests and region_requests[0] <= now - 60:
+            region_requests.popleft()
+        if len(region_requests) >= 12 or slots.locked():
+            raise HTTPException(429, "Server sibuk; coba pratinjau lagi sebentar")
+        region_requests.append(now)
+    async with slots:
+        output = await run_in_threadpool(run_worker, bytes(data), extension, f"pdf-preview:{page}")
+    if len(output) > MAX_OUTPUT_BYTES:
+        raise HTTPException(413, "Pratinjau PDF terlalu besar")
+    try:
+        payload = json.loads(output)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(502, "Pratinjau PDF tidak valid") from None
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/convert")
 async def convert_file(request: Request):
     name, extension = validate_filename(request.headers.get("x-filename"))
@@ -263,8 +316,12 @@ async def convert_file(request: Request):
     async with slots:
         if use_sumopod:
             markdown = await run_in_threadpool(convert_sumopod, bytes(data), extension)
+            engine = "sumopod"
+        elif extension == ".pdf":
+            markdown, engine = await run_in_threadpool(convert_pdf, bytes(data))
         else:
             markdown = await run_in_threadpool(convert, bytes(data), extension)
+            engine = "tesseract" if extension in IMAGE_FORMATS else "markitdown"
     safe_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(name).stem)[:80] or "document"
     return Response(
         markdown,
@@ -273,7 +330,7 @@ async def convert_file(request: Request):
             "Content-Disposition": f'attachment; filename="{safe_stem}.md"',
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
-            "X-OCR-Engine": "sumopod" if use_sumopod else ("tesseract" if extension in IMAGE_FORMATS else "markitdown"),
+            "X-OCR-Engine": engine,
         },
     )
 

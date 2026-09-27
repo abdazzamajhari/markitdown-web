@@ -1,14 +1,17 @@
 """Short-lived conversion process: accepts only raw file bytes on stdin."""
 
 import io
+import base64
 import csv
 import json
+import re
 import socket
 import subprocess
 import sys
 
 IMAGE_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
 MAX_IMAGE_PIXELS = 8_000_000
+MAX_SCANNED_PDF_PAGES = 8
 
 
 def prepare_image(data: bytes, extension: str, for_vision: bool = False) -> tuple[int, bytes]:
@@ -121,6 +124,65 @@ def read_image_regions(data: bytes, extension: str) -> tuple[int, bytes]:
     return 0, json.dumps({"engine": "tesseract", "regions": regions}, ensure_ascii=False).encode("utf-8")
 
 
+def pdf_pages(data: bytes) -> int:
+    result = subprocess.run(
+        ["pdfinfo", "-"], input=data, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, check=False, timeout=5,
+    )
+    match = re.search(rb"^Pages:\s*(\d+)\s*$", result.stdout, re.MULTILINE)
+    if result.returncode or not match:
+        raise ValueError("Invalid PDF")
+    return int(match.group(1))
+
+
+def render_pdf_page(data: bytes, page: int) -> bytes:
+    result = subprocess.run(
+        ["pdftoppm", "-f", str(page), "-l", str(page), "-scale-to", "1600",
+         "-singlefile", "-jpeg", "-"],
+        input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        check=False, timeout=9,
+    )
+    if result.returncode or not result.stdout.startswith(b"\xff\xd8\xff"):
+        raise ValueError("PDF page could not be rendered")
+    return result.stdout
+
+
+def read_pdf_text(data: bytes) -> tuple[int, bytes]:
+    from markitdown import MarkItDown
+
+    result = MarkItDown(enable_plugins=False).convert_stream(io.BytesIO(data), file_extension=".pdf")
+    markdown = (result.markdown or "").strip()
+    engine = "markitdown"
+    if not markdown:
+        pages = pdf_pages(data)
+        if pages > MAX_SCANNED_PDF_PAGES:
+            return 6, b""
+        extracted = []
+        for page in range(1, pages + 1):
+            code, output = read_image_text(render_pdf_page(data, page), ".jpg")
+            if code:
+                return code, b""
+            extracted.append(f"## Halaman {page}\n\n{output.decode('utf-8').strip()}")
+        markdown = "\n\n".join(extracted).strip()
+        engine = "tesseract-pdf"
+    return 0, json.dumps({"markdown": markdown, "engine": engine}, ensure_ascii=False).encode("utf-8")
+
+
+def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
+    pages = pdf_pages(data)
+    if page < 1 or page > pages:
+        return 7, b""
+    jpeg = render_pdf_page(data, page)
+    code, output = read_image_regions(jpeg, ".jpg")
+    if code:
+        return code, b""
+    regions = json.loads(output)["regions"]
+    payload = {"engine": "tesseract", "page": page, "total_pages": pages,
+               "image": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii"),
+               "regions": regions}
+    return 0, json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
 def block_network(*args, **kwargs):
     raise OSError("Network disabled during document conversion")
 
@@ -145,6 +207,14 @@ def main() -> int:
                 code, output = read_image_regions(data, extension)
             else:
                 code, output = read_image_text(data, extension)
+            if code:
+                return code
+        elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2] == "pdf-convert":
+            code, output = read_pdf_text(data)
+            if code:
+                return code
+        elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2].startswith("pdf-preview:"):
+            code, output = read_pdf_preview(data, int(sys.argv[2].split(":", 1)[1]))
             if code:
                 return code
         else:

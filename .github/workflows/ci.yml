@@ -12,6 +12,6 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
-      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-ind
+      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-ind poppler-utils
       - run: python -m pytest -q
       - run: docker build -t markitdown-web:test .

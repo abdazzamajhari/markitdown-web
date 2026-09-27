@@ -135,6 +135,31 @@ function makePane(title, hint) {
   pane.append(heading);
   return pane;
 }
+function showRegions(layer, regions, message) {
+  layer.replaceChildren();
+  if (!Array.isArray(regions)) throw new Error('Detail OCR tidak valid');
+  for (const region of regions) {
+    if (![region.x, region.y, region.w, region.h].every(Number.isFinite)) continue;
+    const box = document.createElement('button');
+    box.type = 'button';
+    box.className = 'region-box';
+    box.style.left = `${Math.max(0, Math.min(100, region.x * 100))}%`;
+    box.style.top = `${Math.max(0, Math.min(100, region.y * 100))}%`;
+    box.style.width = `${Math.max(0, Math.min(100, region.w * 100))}%`;
+    box.style.height = `${Math.max(0, Math.min(100, region.h * 100))}%`;
+    box.title = region.text;
+    box.setAttribute('aria-label', `Teks OCR lokal: ${region.text}`);
+    box.addEventListener('click', () => {
+      layer.querySelector('.selected')?.classList.remove('selected');
+      box.classList.add('selected');
+      message.textContent = `Teks pada area: ${region.text}`;
+    });
+    layer.append(box);
+  }
+  message.textContent = layer.childElementCount
+    ? `${layer.childElementCount} area terdeteksi oleh OCR lokal. Klik kotak untuk membaca teks per area.`
+    : 'OCR lokal tidak menemukan area teks pada halaman ini. Hasil Markdown tetap tersedia di sebelahnya.';
+}
 function renderDetail(item, markdown, engine) {
   const actions = document.createElement('div');
   actions.className = 'file-actions';
@@ -159,7 +184,7 @@ function renderDetail(item, markdown, engine) {
   summary.textContent = imageFormats.has(item.extension) ? 'Gambar dan kotak OCR · klik untuk sembunyikan' : 'Lihat detail teks yang diekstraksi';
   const grid = document.createElement('div');
   grid.className = 'detail-grid';
-  if (!imageFormats.has(item.extension)) grid.classList.add('text-only');
+  if (!imageFormats.has(item.extension) && item.extension !== 'pdf') grid.classList.add('text-only');
   let loadRegions;
   if (imageFormats.has(item.extension)) {
     details.open = true;
@@ -209,36 +234,86 @@ function renderDetail(item, markdown, engine) {
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-        const regions = payload.regions;
-        if (!Array.isArray(regions)) throw new Error('Detail OCR tidak valid');
-        for (const region of regions) {
-          if (![region.x, region.y, region.w, region.h].every(Number.isFinite)) continue;
-          const box = document.createElement('button');
-          box.type = 'button';
-          box.className = 'region-box';
-          box.style.left = `${Math.max(0, Math.min(100, region.x * 100))}%`;
-          box.style.top = `${Math.max(0, Math.min(100, region.y * 100))}%`;
-          box.style.width = `${Math.max(0, Math.min(100, region.w * 100))}%`;
-          box.style.height = `${Math.max(0, Math.min(100, region.h * 100))}%`;
-          box.title = region.text;
-          box.setAttribute('aria-label', `Teks OCR lokal: ${region.text}`);
-          box.addEventListener('click', () => {
-            layer.querySelector('.selected')?.classList.remove('selected');
-            box.classList.add('selected');
-            regionMessage.textContent = `Teks pada area: ${region.text}`;
-          });
-          layer.append(box);
-        }
-        regionMessage.textContent = layer.childElementCount
-          ? `${layer.childElementCount} area terdeteksi oleh OCR lokal. Klik kotak untuk membaca teks per area.`
-          : 'OCR lokal tidak menemukan area teks. Hasil transkripsi utama tetap tersedia di kanan.';
+        showRegions(layer, payload.regions, regionMessage);
         loaded = true;
       } catch (error) {
         regionMessage.textContent = `${error.message}. Tutup lalu buka detail untuk mencoba lagi.`;
       } finally { loading = false; }
     };
+  } else if (item.extension === 'pdf') {
+    const source = makePane('Halaman PDF dan kotak OCR', 'Kotak: OCR lokal');
+    const zoom = document.createElement('button');
+    zoom.type = 'button';
+    zoom.className = 'zoom-button';
+    zoom.textContent = 'Perbesar halaman';
+    zoom.addEventListener('click', () => {
+      const expanded = grid.classList.toggle('zoomed');
+      zoom.textContent = expanded ? 'Kembalikan ukuran' : 'Perbesar halaman';
+    });
+    source.querySelector('.detail-pane-head').append(zoom);
+    const controls = document.createElement('div');
+    controls.className = 'page-controls';
+    const previous = document.createElement('button');
+    previous.type = 'button'; previous.textContent = '← Sebelumnya'; previous.disabled = true;
+    const pageLabel = document.createElement('span');
+    pageLabel.textContent = 'Halaman 1';
+    const next = document.createElement('button');
+    next.type = 'button'; next.textContent = 'Berikutnya →'; next.disabled = true;
+    controls.append(previous, pageLabel, next);
+    const legend = document.createElement('div');
+    legend.className = 'region-legend';
+    legend.textContent = '▣ Kotak merah menandai tulisan pada halaman PDF. Klik kotak untuk membaca teks.';
+    const scroll = document.createElement('div');
+    scroll.className = 'image-scroll';
+    const frame = document.createElement('div');
+    frame.className = 'image-frame';
+    const image = document.createElement('img');
+    image.alt = `Halaman PDF ${item.file.name}`;
+    const layer = document.createElement('div');
+    layer.className = 'region-layer';
+    frame.append(image, layer);
+    scroll.append(frame);
+    const regionMessage = document.createElement('p');
+    regionMessage.className = 'region-message';
+    regionMessage.textContent = 'Buka detail untuk menampilkan halaman dan kotak OCR.';
+    source.append(controls, legend, scroll, regionMessage);
+    grid.append(source);
+    let currentPage = 1, totalPages = 0, loading = false, loaded = false;
+    const showPage = async (page) => {
+      if (loading) return;
+      loading = true;
+      previous.disabled = next.disabled = true;
+      regionMessage.textContent = `Memuat halaman ${page} dan kotak OCR…`;
+      try {
+        const response = await fetch(`/api/pdf-preview?page=${page}`, {
+          method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
+          body: item.file,
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+        if (!payload.image?.startsWith('data:image/jpeg;base64,') || !Number.isInteger(payload.total_pages)) {
+          throw new Error('Pratinjau PDF tidak valid');
+        }
+        image.src = payload.image;
+        currentPage = payload.page;
+        totalPages = payload.total_pages;
+        pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
+        showRegions(layer, payload.regions, regionMessage);
+        loaded = true;
+      } catch (error) {
+        regionMessage.textContent = `${error.message}. Coba klik halaman lagi atau tutup lalu buka detail.`;
+      } finally {
+        loading = false;
+        previous.disabled = !loaded || currentPage <= 1;
+        next.disabled = !loaded || currentPage >= totalPages;
+      }
+    };
+    previous.addEventListener('click', () => void showPage(currentPage - 1));
+    next.addEventListener('click', () => void showPage(currentPage + 1));
+    loadRegions = async () => { if (!loaded) await showPage(1); };
   }
-  const transcript = makePane('Teks terdeteksi & terekstraksi', engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract' ? 'OCR lokal' : 'MarkItDown');
+  const engineLabel = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
+  const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
   const pre = document.createElement('pre');
   pre.className = 'transcript';
   pre.textContent = markdown || '(Tidak ada teks terdeteksi)';
@@ -248,6 +323,8 @@ function renderDetail(item, markdown, engine) {
   note.className = 'detail-note';
   note.textContent = imageFormats.has(item.extension)
     ? 'Kotak dan teks per area berasal dari Tesseract lokal. Hasil Markdown di sebelahnya berasal dari mesin yang tertera dan belum disejajarkan dengan kotak secara otomatis.'
+    : item.extension === 'pdf'
+      ? 'Klik nama halaman untuk menelusuri hasil OCR per halaman. Kotak dibuat oleh Tesseract lokal; pada PDF dengan lapisan teks, Markdown berasal dari MarkItDown sehingga keduanya dapat berbeda.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
   details.append(summary, grid, note);
   if (loadRegions) details.addEventListener('toggle', () => { if (details.open) void loadRegions(); });
@@ -266,13 +343,13 @@ async function processQueue() {
       const {markdown, engine} = await upload(item);
       item.progress.value = 100;
       item.row.classList.add('done');
-      const label = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract' ? 'OCR lokal' : 'MarkItDown';
+      const label = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
       item.state.textContent = markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       completed.push({name: item.file.name, markdown});
       emptyState.hidden = true;
       const loadRegions = renderDetail(item, markdown, engine);
       updateStatus();
-      if (loadRegions) await loadRegions();
+      if (loadRegions && imageFormats.has(item.extension)) await loadRegions();
     } catch (error) { markError(item, error.message || 'Konversi gagal'); }
     updateStatus();
   }
