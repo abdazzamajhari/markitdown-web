@@ -8,13 +8,14 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw, ImageFont
 
-from app.main import MAX_REQUESTS_PER_MINUTE, app, recent_requests, remote_requests, run_worker
+from app.main import MAX_REQUESTS_PER_MINUTE, app, recent_requests, region_requests, remote_requests, run_worker
 
 
 @pytest.fixture
 def client(monkeypatch):
     recent_requests.clear()
     remote_requests.clear()
+    region_requests.clear()
     monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
     return TestClient(app)
 
@@ -31,6 +32,8 @@ def test_health_and_home(client):
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/api/capabilities").json() == {"image_ocr": "tesseract"}
     assert "MarkItDown Web" in client.get("/").text
+    assert client.get("/static/zip.js").status_code == 200
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
 
 
 def test_retired_provider_keys_do_not_enable_remote_ocr(client, monkeypatch):
@@ -117,6 +120,22 @@ def test_transparent_screenshot_ocr(client):
     response = upload(client, "transparent.png", buffer.getvalue())
     assert response.status_code == 200, response.text
     assert "HELLO123" in response.text.replace(" ", "")
+
+
+def test_image_region_positions_and_local_provenance(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "configured-but-not-used-here")
+    image = Image.new("RGB", (900, 220), "white")
+    ImageDraw.Draw(image).text((30, 50), "HELLO 123", font=ImageFont.load_default(size=72), fill="black")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    response = client.post("/api/regions", content=buffer.getvalue(), headers={"X-Filename": "screenshot.png"})
+    assert response.status_code == 200, response.text
+    assert response.json()["engine"] == "tesseract"
+    regions = response.json()["regions"]
+    assert regions and "HELLO" in " ".join(region["text"] for region in regions)
+    assert all(0 <= region[key] <= 1 for region in regions for key in ("x", "y", "w", "h"))
+    assert response.headers["cache-control"] == "no-store"
+    assert client.post("/api/regions", content=b"not an image", headers={"X-Filename": "file.txt"}).status_code == 415
 
 
 def test_sumopod_provider_request_and_output(client, monkeypatch):

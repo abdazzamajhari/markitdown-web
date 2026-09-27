@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 import os
 import re
 import subprocess
@@ -46,6 +47,7 @@ slots = asyncio.Semaphore(1)
 quota_lock = asyncio.Lock()
 recent_requests: deque[float] = deque()
 remote_requests: deque[float] = deque()
+region_requests: deque[float] = deque()
 
 
 def validate_filename(raw: str | None) -> tuple[str, str]:
@@ -186,14 +188,47 @@ async def capabilities():
 
 @app.get("/", include_in_schema=False)
 async def index():
-    return FileResponse(ROOT / "static" / "index.html")
+    return FileResponse(ROOT / "static" / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/static/{filename}", include_in_schema=False)
 async def static(filename: str):
-    if filename not in {"app.js", "style.css"}:
+    if filename not in {"app.js", "style.css", "zip.js"}:
         raise HTTPException(404)
-    return FileResponse(ROOT / "static" / filename)
+    return FileResponse(ROOT / "static" / filename, headers={"Cache-Control": "no-cache"})
+
+
+@app.post("/api/regions")
+async def image_regions(request: Request):
+    """Optional local OCR overlay; its boxes are not aligned to SumoPod's text."""
+    _, extension = validate_filename(request.headers.get("x-filename"))
+    if extension not in IMAGE_FORMATS:
+        raise HTTPException(415, "Pratinjau lokasi teks hanya tersedia untuk gambar")
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > MAX_BYTES:
+        raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > MAX_BYTES:
+            raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
+        data.extend(chunk)
+    validate_content(data, extension)
+    async with quota_lock:
+        now = time.monotonic()
+        while region_requests and region_requests[0] <= now - 60:
+            region_requests.popleft()
+        if len(region_requests) >= 12 or slots.locked():
+            raise HTTPException(429, "Server sibuk; coba pratinjau lagi sebentar")
+        region_requests.append(now)
+    async with slots:
+        output = await run_in_threadpool(run_worker, bytes(data), extension, "regions")
+    if len(output) > MAX_OUTPUT_BYTES:
+        raise HTTPException(413, "Detail OCR terlalu besar")
+    try:
+        payload = json.loads(output)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(502, "Detail OCR tidak valid") from None
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/convert")

@@ -1,6 +1,8 @@
 """Short-lived conversion process: accepts only raw file bytes on stdin."""
 
 import io
+import csv
+import json
 import socket
 import subprocess
 import sys
@@ -64,6 +66,57 @@ def read_image_text(data: bytes, extension: str) -> tuple[int, bytes]:
     return 0, b""
 
 
+def read_image_regions(data: bytes, extension: str) -> tuple[int, bytes]:
+    """Return local OCR line positions for a visual guide, separate from AI output."""
+    from PIL import Image
+
+    code, png = prepare_image(data, extension, for_vision=True)
+    if code:
+        return code, b""
+    with Image.open(io.BytesIO(png)) as image:
+        width, height = image.size
+    try:
+        result = subprocess.run(
+            ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", "3", "tsv"],
+            input=png, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            check=False, timeout=18,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return 2, b""
+    if result.returncode != 0:
+        return 2, b""
+    lines = {}
+    try:
+        for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", "replace")), delimiter="\t"):
+            word = row["text"].strip()
+            if row["level"] != "5" or not word or float(row["conf"]) < 0:
+                continue
+            x, y, w, h = (int(row[k]) for k in ("left", "top", "width", "height"))
+            if w <= 0 or h <= 0:
+                continue
+            key = (row["page_num"], row["block_num"], row["par_num"], row["line_num"])
+            if key not in lines:
+                lines[key] = {"x": x, "y": y, "right": x + w, "bottom": y + h, "words": []}
+            line = lines[key]
+            line["x"] = min(line["x"], x)
+            line["y"] = min(line["y"], y)
+            line["right"] = max(line["right"], x + w)
+            line["bottom"] = max(line["bottom"], y + h)
+            line["words"].append(word)
+    except (KeyError, TypeError, ValueError):
+        return 2, b""
+    regions = []
+    for line in list(lines.values())[:600]:
+        regions.append({
+            "x": round(line["x"] / width, 5),
+            "y": round(line["y"] / height, 5),
+            "w": round((line["right"] - line["x"]) / width, 5),
+            "h": round((line["bottom"] - line["y"]) / height, 5),
+            "text": " ".join(line["words"])[:300],
+        })
+    return 0, json.dumps({"engine": "tesseract", "regions": regions}, ensure_ascii=False).encode("utf-8")
+
+
 def block_network(*args, **kwargs):
     raise OSError("Network disabled during document conversion")
 
@@ -84,6 +137,8 @@ def main() -> int:
         if extension in IMAGE_EXTENSIONS:
             if len(sys.argv) > 2 and sys.argv[2] == "prepare-vision":
                 code, output = prepare_image(data, extension, for_vision=True)
+            elif len(sys.argv) > 2 and sys.argv[2] == "regions":
+                code, output = read_image_regions(data, extension)
             else:
                 code, output = read_image_text(data, extension)
             if code:

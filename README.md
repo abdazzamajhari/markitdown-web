@@ -4,11 +4,14 @@ Aplikasi web mandiri untuk mengonversi dokumen ke Markdown menggunakan [microsof
 
 ## Fitur dan batasan
 
-- Seret banyak berkas ke halaman: antrean diproses berurutan, dengan progres unggah, status OCR/konversi, pratinjau, dan unduhan `.md` per berkas. Klik area drop untuk pemilihan berkas di perangkat yang tidak mendukung drag and drop.
+- Seret banyak berkas ke area unggah **atau bagian lain halaman**: antrean diproses berurutan, dengan progres unggah dan status OCR/konversi. Klik area unggah untuk memilih berkas di perangkat tanpa drag and drop.
+- Buka **Lihat detail** pada hasil untuk membaca seluruh Markdown. Untuk gambar, halaman menampilkan gambar sumber dengan kotak lokasi teks yang bisa diklik, berdampingan dengan transkripsi. Kotak dan teks per area dihitung menggunakan **Tesseract lokal** melalui `POST /api/regions`; transkripsi utama tetap dihasilkan oleh mesin yang disebut pada hasil (SumoPod atau Tesseract). Keduanya **tidak disejajarkan secara otomatis** dan kotak dapat tidak lengkap meskipun transkripsi SumoPod membaca teks lain.
+- Unduh `.md` per berkas, **semua `.md` dalam satu ZIP**, atau **satu `.md` gabungan**. ZIP dibuat di browser dari hasil yang sudah diterima; berkas gagal tidak dimasukkan. Hasil kosong yang berhasil diproses menghasilkan `.md` kosong. Periksa hasil sebelum digunakan sebagai data penelitian atau dokumen resmi.
 - Endpoint `POST /api/convert` tetap menerima satu berkas per permintaan; antarmuka mengirimnya satu per satu.
+- `POST /api/regions` menerima berkas gambar biner dengan header `X-Filename` yang sama dan mengembalikan `{"engine":"tesseract","regions":[{"x":0.1,"y":0.2,"w":0.3,"h":0.04,"text":"..."}]}`. Koordinat dinormalisasi terhadap gambar berorientasi benar yang diproses worker. Endpoint hanya dipanggil ketika detail gambar dibuka, memakai kuota terpisah 12 pratinjau per menit per instans, dan tidak mengirim gambar ke SumoPod.
 - Format: PNG, JPG/JPEG, WebP, PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON. Maksimum 10 MB per berkas, 8 megapiksel per gambar, dan 2 MB hasil Markdown.
 - Gambar statis diproses dengan Tesseract OCR lokal (bahasa Indonesia dan Inggris) secara default. Jika `SUMOPOD_API_KEY` diatur, gambar dikirim ke SumoPod untuk ditranskripsikan dengan model vision `gpt-4o-mini`. Halaman menampilkan konfigurasi OCR dan mesin yang digunakan per hasil. Konfigurasi Hugging Face, DeepInfra, dan Cirrascale lama tidak digunakan.
-- Akses publik tanpa kunci; berkas tidak ditulis ke penyimpanan permanen. Worker terpisah dibatasi waktu 30 detik, CPU 25 detik, dan ruang alamat 1 GiB (Linux).
+- Akses publik tanpa kunci pengguna; berkas tidak ditulis ke penyimpanan permanen. Worker terpisah dibatasi waktu 30 detik, CPU 25 detik, dan ruang alamat 1 GiB (Linux). Hasil unduhan massal dirakit sementara di memori browser; muat ulang halaman akan menghapus daftar hasilnya.
 - Tidak menerima URL, path server, HTML, ZIP, atau plugin dari pengguna. PDF berbasis gambar tanpa lapisan teks masih dapat menghasilkan teks kosong; OCR saat ini berlaku untuk berkas gambar, bukan halaman PDF hasil pindai atau gambar yang tertanam dalam dokumen.
 - Maksimum satu proses konversi aktif dan 12 konversi per menit per instans. Permintaan selebihnya mendapat HTTP 429. Batas ini tidak menggantikan pembatasan trafik di tepi jaringan; untuk beban tinggi perlu antrian kerja dan pengaturan kapasitas terpisah.
 - Jika SumoPod terkonfigurasi, dibatasi lagi menjadi 30 permintaan gambar per jam per instans. Ini bukan batas biaya yang kuat karena hitungan di-reset saat proses dimulai ulang; tetapkan batas belanja pada kunci API SumoPod sebelum membuka layanan publik.
@@ -46,21 +49,30 @@ curl -f -X POST 'http://127.0.0.1:8000/api/convert' \
 
 `GET /health` mengembalikan `{"status":"ok"}`. Kesalahan mengembalikan JSON `{"detail":"..."}`. Endpoint konversi dapat dipakai siapa saja yang mengetahui URL. Gunakan HTTPS saat akses dari internet.
 
+Contoh mengambil lokasi OCR lokal untuk gambar (koordinat dan teks per baris, **bukan** bounding box dari SumoPod):
+
+```bash
+curl -f -X POST 'http://127.0.0.1:8000/api/regions' \
+  -H 'X-Filename: screenshot.png' \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary '@screenshot.png'
+```
+
 ## Mengaktifkan OCR AI (SumoPod)
 
 Layanan ini menggunakan endpoint OpenAI-compatible `https://ai.sumopod.com/v1/chat/completions` dan model `gpt-4o-mini` untuk gambar. Ini adalah OCR berbasis model vision, **bukan olmOCR 2**.
 
 1. Di SumoPod, buat API key dan tetapkan batas anggaran untuk kunci tersebut.
 2. Di Dashboard Render untuk web service ini, buka **Environment**, atur `SUMOPOD_API_KEY` ke nilai kunci, lalu simpan agar layanan dideploy ulang. Anda dapat menghapus `HF_OLMOCR_ENDPOINT_URL`, `HF_TOKEN`, `DEEPINFRA_API_KEY`, dan `CIRRASCALE_API_KEY` lama. Jangan menaruh kunci dalam GitHub, URL, atau kolom di halaman web.
-3. Muat ulang situs; keterangan pada area drop akan berubah menjadi **OCR AI terkonfigurasi melalui SumoPod**. Coba satu screenshot dan periksa status hasil **Selesai (SumoPod · gpt-4o-mini)**. Tanpa variabel itu, aplikasi memakai OCR lokal.
+3. Muat ulang situs; keterangan pada area unggah akan menampilkan **OCR gambar: SumoPod**. Coba satu screenshot dan periksa status hasil **Selesai (SumoPod · gpt-4o-mini)**. Buka detail untuk melihat transkripsi dan kotak OCR lokal. Tanpa variabel itu, aplikasi memakai OCR lokal.
 
 Ketika SumoPod terkonfigurasi, gambar pengguna diteruskan ke SumoPod; periksa ketentuan pemrosesan data sebelum mengunggah dokumen sensitif. Respons penyedia yang gagal ditampilkan sebagai kesalahan dan tidak diam-diam diganti OCR lokal. Instruksi model meminta transkripsi teks asli dari gambar, bukan terjemahan ke bahasa lain. Biaya model bergantung pada pemakaian token gambar dan teks.
 
 ## GitHub dan deployment Render
 
 1. Sumber kode tersedia di [abdazzamajhari/markitdown-web](https://github.com/abdazzamajhari/markitdown-web).
-2. Di Render, pilih **New → Blueprint**, sambungkan repositori GitHub tersebut, dan gunakan `render.yaml`. Tidak diperlukan variabel lingkungan untuk kunci.
-3. Setelah build selesai, buka alamat `https://...onrender.com`, seret beberapa berkas ke area drop, lalu unduh setiap hasilnya. Uji `https://...onrender.com/health`.
+2. Di Render, pilih **New → Blueprint**, sambungkan repositori GitHub tersebut, dan gunakan `render.yaml`. `SUMOPOD_API_KEY` bersifat opsional untuk OCR gambar AI; tanpa variabel itu digunakan OCR lokal.
+3. Setelah build selesai, buka alamat `https://...onrender.com`, seret beberapa berkas, lihat detail hasil, lalu uji unduhan per berkas, ZIP seluruh `.md`, dan `.md` gabungan. Uji `https://...onrender.com/health`.
 
 Blueprint memakai paket `free` untuk percobaan awal. Kapasitas 512 MB dan batas layanan gratis dapat menggagalkan konversi dokumen besar; pilih paket dengan memori memadai setelah mengukur kebutuhan dan memeriksa biaya di dashboard. `checksPass` menunggu CI GitHub berhasil sebelum auto-deploy. Jika layanan lama masih menyimpan `WEB_API_KEY` di Dashboard Render, Anda boleh menghapusnya; aplikasi mengabaikannya.
 
