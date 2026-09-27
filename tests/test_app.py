@@ -155,6 +155,56 @@ def scanned_pdf(page_count=4):
     return buffer.getvalue()
 
 
+def table_text_pdf():
+    """A tiny PDF with selectable text in separate table columns."""
+    contents = (b"0.5 w 40 650 520 100 re S 300 650 m 300 750 l S "
+                b"BT /F1 18 Tf 55 710 Td (LEFT CELL) Tj ET "
+                b"BT /F1 18 Tf 320 710 Td (RIGHT CELL) Tj ET")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(contents)).encode() + b" >>\nstream\n" + contents + b"\nendstream",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode() + obj + b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010} 00000 n \n".encode())
+    pdf.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+    return bytes(pdf)
+
+
+def test_pdf_table_cells_use_selectable_text_positions(client):
+    response = client.post(
+        "/api/pdf-preview?page=1", content=table_text_pdf(),
+        headers={"X-Filename": "table.pdf"},
+    )
+    assert response.status_code == 200, response.text[:200]
+    payload = response.json()
+    cells = [region for region in payload["regions"] if region["source"] == "pdf-text"]
+    assert payload["image"].startswith("data:image/jpeg;base64,")
+    assert payload["engine"] == "pdf-text+tesseract"
+    assert len(cells) == 2
+    assert {cell["text"] for cell in cells} == {"LEFT CELL", "RIGHT CELL"}
+    assert cells[0]["x"] < .5 < cells[1]["x"]
+    assert all(.08 < cell["y"] < .13 for cell in cells)
+
+
+def test_region_merge_keeps_new_table_cells_without_repeating_text():
+    text_layer = [{"x": .1, "y": .2, "w": .25, "h": .03, "text": "LEFT CELL", "source": "pdf-text"}]
+    ocr = [
+        {"x": .101, "y": .201, "w": .24, "h": .029, "text": "LEFT CEL", "source": "tesseract"},
+        {"x": .52, "y": .2, "w": .25, "h": .03, "text": "RIGHT CELL", "source": "tesseract"},
+    ]
+    assert [box["text"] for box in worker.merge_regions(text_layer, ocr)] == ["LEFT CELL", "RIGHT CELL"]
+
+
 def test_scanned_pdf_ocr_and_visible_boxes_on_each_page(client):
     scanned = scanned_pdf()
     response = upload(client, "faktur.pdf", scanned)

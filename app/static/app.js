@@ -148,7 +148,7 @@ function showRegions(layer, regions, message) {
     box.style.width = `${Math.max(0, Math.min(100, region.w * 100))}%`;
     box.style.height = `${Math.max(0, Math.min(100, region.h * 100))}%`;
     box.title = region.text;
-    box.setAttribute('aria-label', `Teks OCR lokal: ${region.text}`);
+    box.setAttribute('aria-label', `${region.source === 'pdf-text' ? 'Teks lapisan PDF' : 'Teks OCR lokal'}: ${region.text}`);
     box.addEventListener('click', () => {
       layer.querySelector('.selected')?.classList.remove('selected');
       box.classList.add('selected');
@@ -157,8 +157,8 @@ function showRegions(layer, regions, message) {
     layer.append(box);
   }
   message.textContent = layer.childElementCount
-    ? `${layer.childElementCount} area terdeteksi oleh OCR lokal. Klik kotak untuk membaca teks per area.`
-    : 'OCR lokal tidak menemukan area teks pada halaman ini. Hasil Markdown tetap tersedia di sebelahnya.';
+    ? `${layer.childElementCount} area teks ditandai dari ${regions.some(region => region.source === 'pdf-text') ? 'lapisan PDF dan OCR lokal' : 'OCR lokal'}. Klik kotak untuk membaca per area.`
+    : 'Tidak ada area teks yang terdeteksi pada halaman ini. Hasil Markdown tetap tersedia di sebelahnya.';
 }
 function renderDetail(item, markdown, engine) {
   const actions = document.createElement('div');
@@ -241,7 +241,7 @@ function renderDetail(item, markdown, engine) {
       } finally { loading = false; }
     };
   } else if (item.extension === 'pdf') {
-    const source = makePane('Halaman PDF dan kotak OCR', 'Kotak: OCR lokal');
+    const source = makePane('Halaman PDF dan kotak teks', 'Lapisan PDF + OCR lokal');
     const zoom = document.createElement('button');
     zoom.type = 'button';
     zoom.className = 'zoom-button';
@@ -264,7 +264,7 @@ function renderDetail(item, markdown, engine) {
     controls.append(previous, pageLabel, next, retry);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
-    legend.textContent = '▣ Kotak merah menandai tulisan pada halaman PDF. Klik kotak untuk membaca teks.';
+    legend.textContent = '▣ Kotak merah menandai teks dari lapisan PDF dan OCR lokal pada gambar. Klik untuk membaca per area.';
     const scroll = document.createElement('div');
     scroll.className = 'image-scroll pdf-preview-scroll is-loading';
     scroll.setAttribute('aria-busy', 'true');
@@ -387,7 +387,7 @@ function renderDetail(item, markdown, engine) {
   note.textContent = imageFormats.has(item.extension)
     ? 'Kotak dan teks per area berasal dari Tesseract lokal. Hasil Markdown di sebelahnya berasal dari mesin yang tertera dan belum disejajarkan dengan kotak secara otomatis.'
     : item.extension === 'pdf'
-      ? 'Gunakan tombol Sebelumnya/Berikutnya untuk menelusuri halaman. Kotak dibuat oleh Tesseract lokal; pada PDF dengan lapisan teks, Markdown berasal dari MarkItDown sehingga keduanya dapat berbeda.'
+      ? 'Gunakan tombol Sebelumnya/Berikutnya untuk menelusuri halaman. Kotak berasal dari lapisan teks PDF dan OCR Tesseract lokal; hasil Markdown berasal dari mesin yang tertera dan dapat berbeda.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
   details.append(summary, grid, note);
   if (loadRegions) details.addEventListener('toggle', () => { if (details.open) void loadRegions(); });

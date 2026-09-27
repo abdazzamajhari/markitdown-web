@@ -8,6 +8,7 @@ import re
 import socket
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 IMAGE_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
 MAX_IMAGE_PIXELS = 8_000_000
@@ -69,8 +70,34 @@ def read_image_text(data: bytes, extension: str) -> tuple[int, bytes]:
     return 0, b""
 
 
+def merge_regions(existing: list[dict], additions: list[dict], limit: int = 600) -> list[dict]:
+    """Keep new text locations while removing near-identical OCR detections."""
+    regions = list(existing[:limit])
+    for region in additions:
+        if len(regions) >= limit:
+            break
+        area = region["w"] * region["h"]
+        if area <= 0:
+            continue
+        candidate_text = re.sub(r"\W+", "", region["text"].casefold())
+        duplicate = False
+        for other in regions:
+            overlap_w = max(0, min(region["x"] + region["w"], other["x"] + other["w"]) - max(region["x"], other["x"]))
+            overlap_h = max(0, min(region["y"] + region["h"], other["y"] + other["h"]) - max(region["y"], other["y"]))
+            if overlap_w * overlap_h / area < 0.65:
+                continue
+            other_text = re.sub(r"\W+", "", other["text"].casefold())
+            if other.get("source") == "pdf-text" or (candidate_text and other_text and
+                (candidate_text in other_text or other_text in candidate_text)):
+                duplicate = True
+                break
+        if not duplicate:
+            regions.append(region)
+    return regions
+
+
 def read_image_regions(data: bytes, extension: str) -> tuple[int, bytes]:
-    """Return local OCR line positions for a visual guide, separate from AI output."""
+    """Return local OCR line positions, including extra detections from sparse text."""
     from PIL import Image
 
     # Keep the screenshot's full resolution so small UI text remains detectable.
@@ -79,18 +106,22 @@ def read_image_regions(data: bytes, extension: str) -> tuple[int, bytes]:
         return code, b""
     with Image.open(io.BytesIO(png)) as image:
         width, height = image.size
-    lines = {}
+    regions = []
+    had_error = False
     for psm in ("3", "11"):
         try:
             result = subprocess.run(
                 ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", psm, "tsv"],
                 input=png, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                check=False, timeout=10,
+                check=False, timeout=7,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return 2, b""
+            had_error = True
+            continue
         if result.returncode != 0:
-            return 2, b""
+            had_error = True
+            continue
+        lines = {}
         try:
             for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", "replace")), delimiter="\t"):
                 word = row["text"].strip()
@@ -109,19 +140,59 @@ def read_image_regions(data: bytes, extension: str) -> tuple[int, bytes]:
                 line["bottom"] = max(line["bottom"], y + h)
                 line["words"].append(word)
         except (KeyError, TypeError, ValueError):
-            return 2, b""
-        if lines:
-            break
-    regions = []
-    for line in list(lines.values())[:600]:
-        regions.append({
+            had_error = True
+            continue
+        additions = [{
             "x": round(line["x"] / width, 5),
             "y": round(line["y"] / height, 5),
             "w": round((line["right"] - line["x"]) / width, 5),
             "h": round((line["bottom"] - line["y"]) / height, 5),
             "text": " ".join(line["words"])[:300],
-        })
+            "source": "tesseract",
+        } for line in list(lines.values())[:600]]
+        regions = merge_regions(regions, additions)
+    if had_error and not regions:
+        return 2, b""
     return 0, json.dumps({"engine": "tesseract", "regions": regions}, ensure_ascii=False).encode("utf-8")
+
+
+def read_pdf_text_regions(data: bytes, page: int) -> list[dict]:
+    """Read boxes from a PDF text layer, including individual table cells."""
+    try:
+        result = subprocess.run(
+            ["pdftotext", "-f", str(page), "-l", str(page), "-bbox-layout", "-", "-"],
+            input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            check=False, timeout=5,
+        )
+        if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
+            return []
+        root = ET.fromstring(result.stdout)
+        page_node = next((node for node in root.iter() if node.tag.endswith("page")), None)
+        if page_node is None:
+            return []
+        width, height = float(page_node.attrib["width"]), float(page_node.attrib["height"])
+        if not (0 < width < 100000 and 0 < height < 100000):
+            return []
+        regions = []
+        for line in page_node.iter():
+            if not line.tag.endswith("line"):
+                continue
+            words = [word.text.strip() for word in line if word.tag.endswith("word") and word.text and word.text.strip()]
+            if not words:
+                continue
+            x1, y1, x2, y2 = (float(line.attrib[key]) for key in ("xMin", "yMin", "xMax", "yMax"))
+            if not (0 <= x1 < x2 <= width and 0 <= y1 < y2 <= height):
+                continue
+            regions.append({
+                "x": round(x1 / width, 5), "y": round(y1 / height, 5),
+                "w": round((x2 - x1) / width, 5), "h": round((y2 - y1) / height, 5),
+                "text": " ".join(words)[:300], "source": "pdf-text",
+            })
+            if len(regions) >= 600:
+                break
+        return regions
+    except (OSError, ValueError, KeyError, ET.ParseError, subprocess.TimeoutExpired):
+        return []
 
 
 def pdf_pages(data: bytes) -> int:
@@ -188,16 +259,20 @@ def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
         return 7, b""
     payload = {"engine": "tesseract", "page": page, "total_pages": pages,
                "image": None, "regions": []}
+    text_regions = read_pdf_text_regions(data, page)
     try:
         jpeg = render_pdf_page(data, page)
         payload["image"] = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
         code, output = read_image_regions(jpeg, ".jpg")
         if code:
-            payload["warning"] = "Halaman ditampilkan, tetapi OCR lokal tidak berhasil memetakan kotak teks."
+            payload["regions"] = text_regions
+            payload["warning"] = "Halaman ditampilkan, tetapi OCR lokal tidak berhasil memetakan teks pada gambar."
         else:
-            payload["regions"] = json.loads(output)["regions"]
+            payload["regions"] = merge_regions(text_regions, json.loads(output)["regions"])
             if not payload["regions"]:
-                payload["warning"] = "OCR lokal tidak menemukan kotak teks pada halaman ini. Coba lagi atau unggah halaman sebagai gambar."
+                payload["warning"] = "Teks PDF dan OCR lokal tidak menemukan kotak pada halaman ini. Coba lagi atau unggah halaman sebagai gambar."
+        if text_regions:
+            payload["engine"] = "pdf-text+tesseract"
     except (OSError, ValueError, subprocess.TimeoutExpired):
         payload["warning"] = "Halaman ini tidak dapat dirender. Coba lagi atau lanjut ke halaman berikutnya."
     return 0, json.dumps(payload, ensure_ascii=False).encode("utf-8")
