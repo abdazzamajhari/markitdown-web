@@ -4,20 +4,20 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import MAX_REQUESTS_PER_MINUTE, app, recent_requests
 
 
 @pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setenv("WEB_API_KEY", "test-secret")
+def client():
+    recent_requests.clear()
     return TestClient(app)
 
 
-def upload(client, name, content, key="test-secret"):
+def upload(client, name, content):
     return client.post(
         "/api/convert",
         content=content,
-        headers={"Authorization": f"Bearer {key}", "X-Filename": name},
+        headers={"X-Filename": name},
     )
 
 
@@ -76,10 +76,16 @@ def test_real_pptx_conversion(client):
     assert "Isi slide" in response.text
 
 
-def test_authentication_and_missing_secret(client, monkeypatch):
-    assert upload(client, "a.txt", b"hi", key="wrong").status_code == 401
-    monkeypatch.delenv("WEB_API_KEY")
-    assert upload(client, "a.txt", b"hi").status_code == 503
+def test_public_conversion_ignores_old_secret(client, monkeypatch):
+    monkeypatch.setenv("WEB_API_KEY", "old-secret")
+    assert upload(client, "a.txt", b"hi").status_code == 200
+
+
+def test_public_quota(client, monkeypatch):
+    monkeypatch.setattr("app.main.convert", lambda data, extension: "ok")
+    for _ in range(MAX_REQUESTS_PER_MINUTE):
+        assert upload(client, "a.txt", b"hi").status_code == 200
+    assert upload(client, "a.txt", b"hi").status_code == 429
 
 
 @pytest.mark.parametrize("name,content,expected", [

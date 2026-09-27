@@ -1,6 +1,5 @@
 const form = document.querySelector('#form');
 const fileInput = document.querySelector('#file');
-const keyInput = document.querySelector('#key');
 const status = document.querySelector('#status');
 const preview = document.querySelector('#preview');
 const result = document.querySelector('#result');
@@ -25,7 +24,6 @@ form.addEventListener('submit', async (event) => {
     const response = await fetch('/api/convert', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${keyInput.value}`,
         'X-Filename': encodeURIComponent(file.name),
         'Content-Type': 'application/octet-stream',
       },

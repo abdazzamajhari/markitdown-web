@@ -1,12 +1,13 @@
-"""Authenticated, bounded upload API and browser interface."""
+"""Public, bounded upload API and browser interface."""
 
 import asyncio
-import hmac
 import os
 import re
 import subprocess
 import sys
+import time
 import zipfile
+from collections import deque
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote
@@ -26,9 +27,12 @@ MAX_BYTES = 10 * 1024 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 TIMEOUT_SECONDS = 30
+MAX_REQUESTS_PER_MINUTE = 12
 
 app = FastAPI(title="MarkItDown Web", version="1.0.0", docs_url=None, redoc_url=None)
 slots = asyncio.Semaphore(1)
+quota_lock = asyncio.Lock()
+recent_requests: deque[float] = deque()
 
 
 def validate_filename(raw: str | None) -> tuple[str, str]:
@@ -109,12 +113,6 @@ async def static(filename: str):
 
 @app.post("/api/convert")
 async def convert_file(request: Request):
-    secret = os.environ.get("WEB_API_KEY", "")
-    if not secret:
-        raise HTTPException(503, "WEB_API_KEY belum diatur pada server")
-    authorization = request.headers.get("authorization", "")
-    if not hmac.compare_digest(authorization, "Bearer " + secret):
-        raise HTTPException(401, "Kunci API tidak valid", headers={"WWW-Authenticate": "Bearer"})
     name, extension = validate_filename(request.headers.get("x-filename"))
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > MAX_BYTES:
@@ -125,9 +123,16 @@ async def convert_file(request: Request):
             raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
         data.extend(chunk)
     validate_content(data, extension)
-    # Reject rather than queue unbounded conversion jobs.
-    if slots.locked():
-        raise HTTPException(429, "Server sibuk; coba lagi sebentar")
+    # Bound public traffic per instance and reject rather than queue conversions.
+    async with quota_lock:
+        now = time.monotonic()
+        while recent_requests and recent_requests[0] <= now - 60:
+            recent_requests.popleft()
+        if len(recent_requests) >= MAX_REQUESTS_PER_MINUTE:
+            raise HTTPException(429, "Batas konversi sementara tercapai; coba lagi sebentar")
+        if slots.locked():
+            raise HTTPException(429, "Server sibuk; coba lagi sebentar")
+        recent_requests.append(now)
     async with slots:
         markdown = await run_in_threadpool(convert, bytes(data), extension)
     safe_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(name).stem)[:80] or "document"
