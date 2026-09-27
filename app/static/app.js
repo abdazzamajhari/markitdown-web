@@ -173,7 +173,7 @@ fetch('/api/capabilities', {cache: 'no-store'})
   .then((response) => response.json())
   .then(({image_ocr}) => {
     ocrMode.textContent = image_ocr === 'olmocr2'
-      ? 'olmOCR 2 terkonfigurasi melalui Cirrascale. Gambar dikirim ke penyedia untuk diproses; berkas lain tetap diproses di server ini.'
+      ? 'olmOCR 2 terkonfigurasi melalui Hugging Face Inference Endpoint. Gambar dikirim ke endpoint tersebut; berkas lain tetap diproses di server ini.'
       : 'OCR lokal aktif untuk gambar bahasa Indonesia dan Inggris. Gambar tidak dikirim ke penyedia AI.';
   })
   .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });

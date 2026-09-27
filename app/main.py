@@ -11,7 +11,7 @@ import zipfile
 from collections import deque
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -32,8 +32,7 @@ MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 MAX_REQUESTS_PER_MINUTE = 12
 MAX_REMOTE_REQUESTS_PER_HOUR = 30
-OLMOCR_URL = "https://ai2endpoints.cirrascale.ai/api/chat/completions"
-OLMOCR_MODEL = "olmOCR-2-7B-1025"
+OLMOCR_MODEL = "allenai/olmOCR-2-7B-1025-FP8"
 OLMOCR_PROMPT = (
     "Attached is one document image. Transcribe all readable text in natural order. "
     "Represent tables as HTML and equations as LaTeX. Do not invent text. "
@@ -46,6 +45,23 @@ slots = asyncio.Semaphore(1)
 quota_lock = asyncio.Lock()
 recent_requests: deque[float] = deque()
 remote_requests: deque[float] = deque()
+
+
+def olmocr_endpoint() -> str | None:
+    """Only send the server-side Hugging Face token to a dedicated HF endpoint."""
+    url = os.environ.get("HF_OLMOCR_ENDPOINT_URL", "").strip().rstrip("/")
+    if not url or not os.environ.get("HF_TOKEN", "").strip():
+        return None
+    try:
+        parts = urlsplit(url)
+        if (parts.scheme != "https" or not parts.hostname or
+            not parts.hostname.endswith(".endpoints.huggingface.cloud") or
+            parts.username or parts.password or parts.port or parts.query or parts.fragment or
+            parts.path not in {"", "/v1"}):
+            return None
+    except ValueError:
+        return None
+    return url.removesuffix("/v1") + "/v1/chat/completions"
 
 
 def validate_filename(raw: str | None) -> tuple[str, str]:
@@ -121,6 +137,9 @@ def convert(data: bytes, extension: str) -> str:
 
 
 def convert_olmocr(data: bytes, extension: str) -> str:
+    endpoint = olmocr_endpoint()
+    if endpoint is None:
+        raise HTTPException(503, "Endpoint olmOCR 2 Hugging Face belum dikonfigurasi")
     # Decode untrusted images in the constrained worker; the provider key stays in this process.
     png = run_worker(data, extension, "prepare-olmocr", timeout=20)
     if len(png) > MAX_BYTES:
@@ -137,8 +156,8 @@ def convert_olmocr(data: bytes, extension: str) -> str:
     }
     try:
         result = httpx.post(
-            OLMOCR_URL, json=payload,
-            headers={"Authorization": "Bearer " + os.environ["CIRRASCALE_API_KEY"]},
+            endpoint, json=payload,
+            headers={"Authorization": "Bearer " + os.environ["HF_TOKEN"].strip()},
             timeout=80, follow_redirects=False,
         )
     except httpx.HTTPError:
@@ -147,6 +166,8 @@ def convert_olmocr(data: bytes, extension: str) -> str:
         raise HTTPException(503, "Kunci layanan olmOCR 2 tidak valid")
     if result.status_code == 429:
         raise HTTPException(503, "Kuota layanan olmOCR 2 tercapai; coba lagi nanti")
+    if result.status_code == 502:
+        raise HTTPException(503, "Endpoint Hugging Face sedang memulai atau bermasalah; coba lagi nanti")
     if result.status_code != 200:
         raise HTTPException(502, f"Penyedia olmOCR 2 mengembalikan HTTP {result.status_code}")
     if len(result.content) > MAX_OUTPUT_BYTES + 65536:
@@ -174,7 +195,7 @@ async def health():
 
 @app.get("/api/capabilities")
 async def capabilities():
-    return {"image_ocr": "olmocr2" if os.environ.get("CIRRASCALE_API_KEY") else "tesseract"}
+    return {"image_ocr": "olmocr2" if olmocr_endpoint() else "tesseract"}
 
 
 @app.get("/", include_in_schema=False)
@@ -208,7 +229,7 @@ async def convert_file(request: Request):
             recent_requests.popleft()
         while remote_requests and remote_requests[0] <= now - 3600:
             remote_requests.popleft()
-        use_olmocr = extension in IMAGE_FORMATS and bool(os.environ.get("CIRRASCALE_API_KEY"))
+        use_olmocr = extension in IMAGE_FORMATS and bool(olmocr_endpoint())
         if len(recent_requests) >= MAX_REQUESTS_PER_MINUTE:
             raise HTTPException(429, "Batas konversi sementara tercapai; coba lagi sebentar")
         if use_olmocr and len(remote_requests) >= MAX_REMOTE_REQUESTS_PER_HOUR:
