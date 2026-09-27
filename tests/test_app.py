@@ -1,16 +1,21 @@
+import base64
 import io
+import os
 import zipfile
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw, ImageFont
 
-from app.main import MAX_REQUESTS_PER_MINUTE, app, recent_requests
+from app.main import MAX_REQUESTS_PER_MINUTE, app, recent_requests, remote_requests, run_worker
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     recent_requests.clear()
+    remote_requests.clear()
+    monkeypatch.delenv("DEEPINFRA_API_KEY", raising=False)
     return TestClient(app)
 
 
@@ -24,6 +29,7 @@ def upload(client, name, content):
 
 def test_health_and_home(client):
     assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/api/capabilities").json() == {"image_ocr": "tesseract"}
     assert "MarkItDown Web" in client.get("/").text
 
 
@@ -90,6 +96,67 @@ def test_real_image_ocr(client, format_name, extension):
     response = upload(client, "screenshot" + extension, buffer.getvalue())
     assert response.status_code == 200, response.text
     assert "HELLO 123" in response.text
+    assert response.headers["x-ocr-engine"] == "tesseract"
+
+
+def test_transparent_screenshot_ocr(client):
+    image = Image.new("RGBA", (640, 150), (255, 255, 255, 0))
+    ImageDraw.Draw(image).text(
+        (20, 25), "HELLO 123", font=ImageFont.load_default(size=72), fill=(0, 0, 0, 255),
+    )
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    response = upload(client, "transparent.png", buffer.getvalue())
+    assert response.status_code == 200, response.text
+    assert "HELLO 123" in response.text
+
+
+def test_olmocr2_provider_request_and_output(client, monkeypatch):
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "server-only-test-key")
+    assert client.get("/api/capabilities").json() == {"image_ocr": "olmocr2"}
+    seen = {}
+
+    def fake_post(url, *, json, headers, timeout, follow_redirects):
+        seen.update(url=url, body=json, headers=headers, timeout=timeout, redirects=follow_redirects)
+        return httpx.Response(200, json={"choices": [{"message": {"content":
+            "---\nprimary_language: en\nis_rotation_valid: true\n---\n\nHELLO 123"}}]})
+
+    monkeypatch.setattr("app.main.httpx.post", fake_post)
+    image = Image.new("RGB", (2000, 1000), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    response = upload(client, "screenshot.png", buffer.getvalue())
+    assert response.status_code == 200, response.text
+    assert response.text == "HELLO 123"
+    assert response.headers["x-ocr-engine"] == "olmocr2"
+    assert seen["url"] == "https://api.deepinfra.com/v1/openai/chat/completions"
+    assert seen["body"]["model"] == "allenai/olmOCR-2-7B-1025"
+    assert seen["headers"]["Authorization"] == "Bearer server-only-test-key"
+    assert seen["redirects"] is False
+    encoded = seen["body"]["messages"][0]["content"][1]["image_url"]["url"].split(",", 1)[1]
+    with Image.open(io.BytesIO(base64.b64decode(encoded))) as sent_image:
+        assert max(sent_image.size) == 1288
+
+
+def test_olmocr2_provider_error_does_not_fall_back(client, monkeypatch):
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "server-only-test-key")
+    monkeypatch.setattr("app.main.httpx.post", lambda *a, **k: httpx.Response(401, text="secret provider body"))
+    image = Image.new("RGB", (100, 100), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    response = upload(client, "screenshot.png", buffer.getvalue())
+    assert response.status_code == 503
+    assert "secret provider body" not in response.text
+
+
+def test_olmocr2_prepares_photo_without_truncating_it():
+    image = Image.frombytes("RGB", (1288, 1288), os.urandom(1288 * 1288 * 3))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=60)
+    prepared = run_worker(buffer.getvalue(), ".jpg", "prepare-olmocr", timeout=20)
+    assert 2 * 1024 * 1024 < len(prepared) < 10 * 1024 * 1024
+    with Image.open(io.BytesIO(prepared)) as converted:
+        assert converted.format == "PNG"
 
 
 def test_public_conversion_ignores_old_secret(client, monkeypatch):
@@ -102,6 +169,15 @@ def test_public_quota(client, monkeypatch):
     for _ in range(MAX_REQUESTS_PER_MINUTE):
         assert upload(client, "a.txt", b"hi").status_code == 200
     assert upload(client, "a.txt", b"hi").status_code == 429
+
+
+def test_olmocr2_hourly_quota(client, monkeypatch):
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "server-only-test-key")
+    monkeypatch.setattr("app.main.MAX_REQUESTS_PER_MINUTE", 100)
+    monkeypatch.setattr("app.main.convert_olmocr", lambda data, extension: "ok")
+    for _ in range(30):
+        assert upload(client, "a.png", b"\x89PNG\r\n\x1a\nmock").status_code == 200
+    assert upload(client, "a.png", b"\x89PNG\r\n\x1a\nmock").status_code == 429
 
 
 @pytest.mark.parametrize("name,content,expected", [

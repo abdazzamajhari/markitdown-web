@@ -7,10 +7,11 @@ Aplikasi web mandiri untuk mengonversi dokumen ke Markdown menggunakan [microsof
 - Seret banyak berkas ke halaman: antrean diproses berurutan, dengan progres unggah, status OCR/konversi, pratinjau, dan unduhan `.md` per berkas. Klik area drop untuk pemilihan berkas di perangkat yang tidak mendukung drag and drop.
 - Endpoint `POST /api/convert` tetap menerima satu berkas per permintaan; antarmuka mengirimnya satu per satu.
 - Format: PNG, JPG/JPEG, WebP, PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON. Maksimum 10 MB per berkas, 8 megapiksel per gambar, dan 2 MB hasil Markdown.
-- Gambar statis diproses dengan Tesseract OCR lokal (bahasa Indonesia dan Inggris). OCR menyalin teks yang terlihat; tidak menerjemahkan bahasa, mendeskripsikan objek, atau membaca gambar yang tak mengandung teks.
+- Gambar statis diproses dengan Tesseract OCR lokal (bahasa Indonesia dan Inggris) secara default. Jika `DEEPINFRA_API_KEY` diatur, gambar dikirim ke DeepInfra untuk diproses oleh `allenai/olmOCR-2-7B-1025`. Halaman menampilkan mesin yang aktif dan yang digunakan per hasil.
 - Akses publik tanpa kunci; berkas tidak ditulis ke penyimpanan permanen. Worker terpisah dibatasi waktu 30 detik, CPU 25 detik, dan ruang alamat 1 GiB (Linux).
 - Tidak menerima URL, path server, HTML, ZIP, plugin, atau layanan AI/OCR eksternal. PDF berbasis gambar tanpa lapisan teks masih dapat menghasilkan teks kosong; OCR saat ini berlaku untuk berkas gambar, bukan halaman PDF hasil pindai atau gambar yang tertanam dalam dokumen.
 - Maksimum satu proses konversi aktif dan 12 konversi per menit per instans. Permintaan selebihnya mendapat HTTP 429. Batas ini tidak menggantikan pembatasan trafik di tepi jaringan; untuk beban tinggi perlu antrian kerja dan pengaturan kapasitas terpisah.
+- Jika olmOCR 2 aktif, dibatasi lagi menjadi 30 permintaan gambar per jam per instans. Ini bukan batas biaya yang kuat karena hitungan di-reset saat proses dimulai ulang; tetapkan batas belanja di akun DeepInfra sebelum membuka layanan publik.
 
 ## Menjalankan lokal
 
@@ -44,6 +45,14 @@ curl -f -X POST 'http://127.0.0.1:8000/api/convert' \
 ```
 
 `GET /health` mengembalikan `{"status":"ok"}`. Kesalahan mengembalikan JSON `{"detail":"..."}`. Endpoint konversi dapat dipakai siapa saja yang mengetahui URL. Gunakan HTTPS saat akses dari internet.
+
+## Mengaktifkan olmOCR 2 (DeepInfra)
+
+1. Buat kunci API di akun DeepInfra Anda dan atur batas pemakaian/biaya di sana. Model yang digunakan: `allenai/olmOCR-2-7B-1025`, melalui endpoint OpenAI-compatible `https://api.deepinfra.com/v1/openai/chat/completions`.
+2. Di Dashboard Render untuk web service ini, buka **Environment**, tambahkan `DEEPINFRA_API_KEY` dengan nilai kunci tersebut, lalu simpan sehingga layanan dideploy ulang. Jangan menaruh kunci dalam GitHub, URL, atau kolom di halaman web.
+3. Muat ulang situs; keterangan pada area drop harus berubah menjadi **olmOCR 2 aktif**. Coba satu screenshot dan periksa status hasil **Selesai (olmOCR 2)**. Tanpa variabel itu, aplikasi tetap memakai OCR lokal.
+
+Ketika olmOCR 2 aktif, gambar pengguna diteruskan ke DeepInfra; periksa ketentuan pemrosesan data penyedia sebelum mengunggah dokumen sensitif. Layanan Render Free tidak menjalankan model 7B sendiri. Respons provider yang gagal ditampilkan sebagai kesalahan dan tidak diam-diam diganti OCR lokal. Model mengembalikan teks yang dibaca dari gambar, bukan terjemahan ke bahasa lain.
 
 ## GitHub dan deployment Render
 

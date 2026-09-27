@@ -3,6 +3,7 @@ const picker = document.querySelector('#picker');
 const list = document.querySelector('#files');
 const status = document.querySelector('#status');
 const notice = document.querySelector('#notice');
+const ocrMode = document.querySelector('#ocr-mode');
 const queue = [];
 const downloads = new Set();
 const supported = new Set(['pdf', 'docx', 'pptx', 'xlsx', 'txt', 'csv', 'json', 'png', 'jpg', 'jpeg', 'webp']);
@@ -89,7 +90,7 @@ function upload(item) {
     });
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(xhr.responseText);
+        resolve({markdown: xhr.responseText, engine: xhr.getResponseHeader('X-OCR-Engine')});
       } else {
         let message = `HTTP ${xhr.status}`;
         try { message = JSON.parse(xhr.responseText).detail || message; } catch { /* Use HTTP status. */ }
@@ -110,10 +111,11 @@ async function processQueue() {
     item.state.textContent = 'Mengunggah…';
     updateStatus();
     try {
-      const markdown = await upload(item);
+      const {markdown, engine} = await upload(item);
       item.progress.value = 100;
       item.row.classList.add('done');
-      item.state.textContent = markdown.trim() ? 'Selesai' : 'Selesai — tidak ada teks terdeteksi';
+      const label = engine === 'olmocr2' ? 'olmOCR 2' : engine === 'tesseract' ? 'OCR lokal' : 'MarkItDown';
+      item.state.textContent = markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) — tidak ada teks terdeteksi`;
       if (markdown.trim()) {
         const actions = document.createElement('div');
         actions.className = 'file-actions';
@@ -166,3 +168,12 @@ document.addEventListener('drop', (event) => event.preventDefault());
 window.addEventListener('pagehide', () => {
   for (const url of downloads) URL.revokeObjectURL(url);
 });
+
+fetch('/api/capabilities', {cache: 'no-store'})
+  .then((response) => response.json())
+  .then(({image_ocr}) => {
+    ocrMode.textContent = image_ocr === 'olmocr2'
+      ? 'olmOCR 2 aktif. Gambar dikirim ke DeepInfra untuk diproses; berkas lain tetap diproses di server ini.'
+      : 'OCR lokal aktif untuk gambar bahasa Indonesia dan Inggris. Gambar tidak dikirim ke penyedia AI.';
+  })
+  .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });
