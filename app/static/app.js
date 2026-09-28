@@ -464,7 +464,7 @@ function renderDetail(item, markdown, engine, record) {
         ? 'OCR dihentikan. Teks halaman yang sudah diproses tersedia untuk diunduh.'
         : failedPages.length
           ? fatalOcrError
-            ? 'OCR dihentikan karena akses penyedia ditolak. Pratinjau halaman tetap tersedia. Perbaiki akses API, lalu unggah ulang berkas untuk OCR lengkap.'
+            ? 'OCR dihentikan karena penyedia belum berhasil membaca gambar. Pratinjau PDF tetap tersedia. Periksa pesan kesalahan, lalu unggah ulang setelah layanan OCR siap.'
             : `OCR selesai; halaman ${failedPages.join(', ')} belum terbaca. Buka halaman tersebut dan klik Coba lagi.`
           : 'OCR selesai. Teks gambar yang ditemukan telah ditambahkan ke unduhan Markdown.';
       regionMessage.textContent = message;
