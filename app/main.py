@@ -165,13 +165,9 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {
                 "url": f"data:{mime_type};base64," + base64.b64encode(image).decode("ascii"),
-                "detail": "high",
             }},
         ]}],
-        "temperature": 0,
-        "thinking": {"type": "disabled"},
         "max_tokens": max_tokens,
-        "stream": False,
     }
     try:
         result = httpx.post(
