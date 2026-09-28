@@ -156,7 +156,7 @@ def vision_provider() -> tuple[str, str, str]:
     raise HTTPException(503, "Atur SUMOPOD_API_KEY di Render untuk OCR melalui SumoPod")
 
 
-def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 8192, timeout: int = 80) -> str:
+def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 8192, timeout: int = 80, thinking: bool = False) -> str:
     url, key, provider = vision_provider()
     if len(image) > MAX_BYTES:
         raise HTTPException(413, "Gambar terlalu besar untuk OCR AI")
@@ -168,9 +168,11 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
                 "url": f"data:{mime_type};base64," + base64.b64encode(image).decode("ascii"),
             }},
         ]}],
-        "thinking": {"type": "enabled"},
-        "reasoning_effort": "low",
+        "thinking": {"type": "enabled" if thinking else "disabled"},
         "max_tokens": max_tokens,
+    }
+    if thinking:
+        payload["reasoning_effort"] = "low"
     }
     try:
         result = httpx.post(
@@ -223,7 +225,8 @@ def verify_vision() -> None:
         buffer = BytesIO()
         sample.save(buffer, format="JPEG", quality=95)
     answer = request_vision(buffer.getvalue(), "image/jpeg",
-                            "Baca empat angka besar pada gambar. Balas hanya angkanya.", max_tokens=512)
+                            "Baca empat angka besar pada gambar. Balas hanya angkanya.",
+                            max_tokens=512, thinking=True)
     if code not in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
         logging.getLogger(__name__).warning("SumoPod vision probe mismatch: expected=%s response=%r",
                                             code, answer[:160])
