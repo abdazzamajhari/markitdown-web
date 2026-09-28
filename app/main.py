@@ -196,7 +196,8 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
     if len(result.content) > MAX_OUTPUT_BYTES + 65536:
         raise HTTPException(502, f"Jawaban {provider} terlalu besar")
     try:
-        choice = result.json()["choices"][0]
+        reply = result.json()
+        choice = reply["choices"][0]
         content = choice["message"]["content"]
         if not isinstance(content, str):
             raise ValueError
@@ -204,6 +205,11 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
         raise HTTPException(502, f"Jawaban {provider} tidak valid") from None
     content = content.strip()
     if choice.get("finish_reason") == "length":
+        reasoning = choice["message"].get("reasoning_content") or ""
+        usage = reply.get("usage") or {}
+        logging.getLogger(__name__).warning(
+            "SumoPod truncated OCR: model=%r content_chars=%d reasoning_chars=%d completion_tokens=%r",
+            reply.get("model"), len(content), len(reasoning), usage.get("completion_tokens"))
         raise HTTPException(502, "Transkripsi DeepSeek terpotong; coba lagi pada halaman ini")
     return content
 
