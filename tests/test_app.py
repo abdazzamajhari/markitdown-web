@@ -219,6 +219,24 @@ def test_rejects_provider_that_ignores_image(monkeypatch):
     assert "tidak cocok dengan gambar uji" in caught.value.detail
 
 
+
+def test_vision_probe_has_room_for_reasoning(monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.secrets, "choice", lambda alphabet: "5")
+    monkeypatch.setattr(app_main, "vision_probe_ok", False)
+    monkeypatch.setattr(app_main, "vision_probe_retry_at", 0.0)
+    calls = []
+
+    def probe(image, mime_type, prompt, **kwargs):
+        calls.append(kwargs)
+        return "5555"
+
+    monkeypatch.setattr(app_main, "request_vision", probe)
+    app_main.verify_vision()
+    assert calls == [{"max_tokens": 2048, "thinking": True}]
+
+
+
 def test_pdf_ocr_each_page_and_boxes(client, monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     sent = fake_provider(monkeypatch, regions=[
