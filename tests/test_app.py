@@ -220,20 +220,20 @@ def test_rejects_provider_that_ignores_image(monkeypatch):
 
 
 
-def test_vision_probe_has_room_for_reasoning(monkeypatch):
+def test_vision_probe_reads_simple_word_without_reasoning(monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
-    monkeypatch.setattr(app_main.secrets, "choice", lambda alphabet: "5")
+    monkeypatch.setattr(app_main.secrets, "choice", lambda choices: "KUCING")
     monkeypatch.setattr(app_main, "vision_probe_ok", False)
     monkeypatch.setattr(app_main, "vision_probe_retry_at", 0.0)
     calls = []
 
     def probe(image, mime_type, prompt, **kwargs):
         calls.append(kwargs)
-        return "5555"
+        return "KUCING"
 
     monkeypatch.setattr(app_main, "request_vision", probe)
     app_main.verify_vision()
-    assert calls == [{"max_tokens": 2048, "thinking": True}]
+    assert calls == [{"max_tokens": 256, "thinking": False}]
 
 
 
