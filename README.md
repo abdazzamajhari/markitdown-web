@@ -7,7 +7,7 @@ Aplikasi web mandiri untuk mengubah dokumen menjadi Markdown. Teks yang dapat di
 - Unggah banyak berkas sekaligus atau seret ke halaman. Jumlah PDF dalam antrean tidak dibatasi; berkas diproses berurutan. Setiap berkas maksimal 10 MB.
 - **Setiap PDF maksimal 30 halaman.** PDF dengan 31 halaman atau lebih langsung ditandai **Dilewati** dan antrean melanjutkan berkas berikutnya. PDF hasil pindai dan PDF campuran dengan gambar tertanam sama-sama diproses per halaman oleh DeepSeek. Progres `OCR halaman N/M` tampil sampai selesai.
 - Panel detail PDF terbuka otomatis. Teks DeepSeek per halaman muncul di awal panel kanan dan ikut masuk ke `.md` per berkas, ZIP seluruh hasil, serta `.md` gabungan. Teks lapisan PDF asli tetap dipertahankan setelah transkripsi halaman sebagai referensi.
-- Kotak merah pada teks yang dapat dipilih memakai koordinat lapisan PDF. Untuk gambar, aplikasi meminta DeepSeek mengembalikan koordinat teks. Koordinat model dapat tidak lengkap; bila tidak tersedia, halaman menyebutkannya tanpa membuat kotak palsu. Kotak dapat diklik untuk membaca teks per area.
+- Kotak merah pada teks yang dapat dipilih memakai koordinat lapisan PDF. Setelah transkripsi teks, aplikasi meminta DeepSeek memetakan koordinat teks pada gambar dengan panggilan terpisah; bila pemetaan gagal, teks hasil OCR tetap masuk ke Markdown. Koordinat model dapat tidak lengkap; bila tidak tersedia, halaman menyebutkannya tanpa membuat kotak palsu. Kotak dapat diklik untuk membaca teks per area.
 - Tombol Sebelumnya/Berikutnya menelusuri halaman PDF, OCR seluruh halaman mengulang pemrosesan, dan Coba lagi mengulang halaman yang gagal. Permintaan yang terkena pembatasan sementara diulang otomatis. Unduhan Markdown lengkap dinonaktifkan jika OCR halaman gagal.
 - Format: PNG, JPG/JPEG, WebP, PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON. Gambar tertanam dalam DOCX/PPTX belum di-OCR.
 
@@ -27,7 +27,7 @@ Atau jalankan Dockerfile. Untuk OCR gambar dan PDF, atur **`SUMOPOD_API_KEY`** s
 
 Menurut [catatan perubahan resmi DeepSeek](https://api-docs.deepseek.com/updates/), ID `deepseek-v4-flash-vision-exp` telah menjadi alias kompatibilitas yang diarahkan ke V4.1 Flash pada API resmi DeepSeek. Aplikasi tetap mengirim ID yang diminta ke SumoPod; perutean aktual di sana bergantung pada SumoPod.
 
-Halaman PDF dan gambar diunggah ke penyedia yang dikonfigurasi saat OCR dijalankan. Periksa kebijakan data dan biaya penyedia sebelum memakai dokumen sensitif. Aplikasi tidak menyimpan berkas secara permanen; daftar hasil di browser hilang setelah halaman dimuat ulang. Banyak PDF berarti banyak panggilan model, satu untuk setiap halaman dan satu tambahan untuk pemetaan kotak gambar biasa.
+Halaman PDF dan gambar diunggah ke penyedia yang dikonfigurasi saat OCR dijalankan. Periksa kebijakan data dan biaya penyedia sebelum memakai dokumen sensitif. Aplikasi tidak menyimpan berkas secara permanen; daftar hasil di browser hilang setelah halaman dimuat ulang. Banyak PDF berarti banyak panggilan model, sedikitnya satu untuk transkripsi tiap halaman dan satu tambahan untuk pemetaan kotak bila koordinat belum tersedia.
 
 ## API
 
