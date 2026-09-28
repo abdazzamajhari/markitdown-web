@@ -173,7 +173,6 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
     }
     if thinking:
         payload["reasoning_effort"] = "low"
-    }
     try:
         result = httpx.post(
             url, json=payload,
