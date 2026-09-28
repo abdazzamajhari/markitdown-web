@@ -162,6 +162,18 @@ def test_payment_failure_keeps_pdf_preview_without_fake_ocr(client, monkeypatch)
     assert all(url == "https://ai.sumopod.com/v1/chat/completions" for url in calls)
 
 
+def test_sumopod_timeout_preserves_preview_and_identifies_timeout(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    monkeypatch.setattr("app.main.httpx.post",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(httpx.ReadTimeout("slow")))
+    response = upload(client, "scan.pdf", pdf_bytes(), "/api/pdf-preview?page=1")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["image"].startswith("data:image/jpeg;base64,")
+    assert payload["ocr_status"] == 504
+    assert "80 detik" in payload["ocr_error"]
+
+
 def test_empty_provider_result_is_not_reported_as_success(client, monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     fake_provider(monkeypatch, markdown="")
