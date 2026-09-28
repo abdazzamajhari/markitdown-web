@@ -343,16 +343,16 @@ function renderDetail(item, markdown, engine, record) {
         let payload = !refresh && pageCache.get(page);
         if (!payload) {
           let response;
-          for (let attempt = 0; attempt < 2; attempt += 1) {
+          while (true) {
             response = await fetch(`/api/pdf-preview?page=${page}`, {
               method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
               body: item.file,
             });
-            if (response.status !== 429 || attempt || cancelScan) break;
+            if (response.status !== 429 || cancelScan) break;
             const seconds = Math.min(60, Math.max(1, Number(response.headers.get('Retry-After')) || 3));
             previewStatus.textContent = `Server sibuk. Melanjutkan halaman ${page} dalam ${seconds} detik…`;
             await new Promise(resolve => setTimeout(resolve, seconds * 1000));
-            if (cancelScan) break;
+            if (cancelScan) throw new Error('OCR dihentikan');
           }
           payload = await response.json();
           if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
