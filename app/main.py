@@ -35,7 +35,6 @@ MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 MAX_REQUESTS_PER_MINUTE = 12
 SUMOPOD_URL = "https://ai.sumopod.com/v1/chat/completions"
-DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 SUMOPOD_MODEL = "deepseek-v4-flash-vision-exp"
 vision_probe_ok = False
 vision_probe_retry_at = 0.0
@@ -149,13 +148,10 @@ def convert_pdf(data: bytes) -> tuple[str, str]:
 
 
 def vision_provider() -> tuple[str, str, str]:
-    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if key:
-        return DEEPSEEK_URL, key, "DeepSeek"
     key = os.environ.get("SUMOPOD_API_KEY", "").strip()
     if key:
         return SUMOPOD_URL, key, "SumoPod"
-    raise HTTPException(503, "Atur DEEPSEEK_API_KEY atau SUMOPOD_API_KEY untuk OCR")
+    raise HTTPException(503, "Atur SUMOPOD_API_KEY di Render untuk OCR melalui SumoPod")
 
 
 def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 8192) -> str:
@@ -187,11 +183,8 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
     if result.status_code in {401, 403}:
         raise HTTPException(503, f"Kunci {provider} tidak valid atau tidak diizinkan")
     if result.status_code == 402:
-        detail = ("Saldo API DeepSeek tidak mencukupi (HTTP 402). Periksa saldo akun DeepSeek."
-                  if provider == "DeepSeek" else
-                  "SumoPod menolak OCR (HTTP 402: pembayaran atau kredit diperlukan). "
-                  "Periksa saldo/paket SumoPod, atau atur DEEPSEEK_API_KEY resmi di Render.")
-        raise HTTPException(402, detail)
+        raise HTTPException(402, "SumoPod menolak OCR (HTTP 402: pembayaran atau kredit diperlukan). "
+                            "Periksa status akun dan tagihan SumoPod.")
     if result.status_code == 429:
         raise HTTPException(429, f"Batas pemakaian {provider} tercapai; coba lagi nanti",
                             headers={"Retry-After": "60"})
@@ -219,7 +212,7 @@ def verify_vision() -> None:
         return
     now = time.monotonic()
     if now < vision_probe_retry_at:
-        raise HTTPException(503, "Penyedia DeepSeek belum dapat membaca gambar; coba lagi nanti")
+        raise HTTPException(503, "SumoPod belum dapat membaca gambar; coba lagi nanti")
     from PIL import Image, ImageDraw, ImageFont
     code = secrets.token_hex(4).upper()
     with Image.new("RGB", (600, 130), "white") as sample:
@@ -232,8 +225,8 @@ def verify_vision() -> None:
                             "Jika gambar tidak terbaca, balas string kosong.", max_tokens=128)
     if code not in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
         vision_probe_retry_at = now + 60
-        raise HTTPException(503, "Penyedia DeepSeek menerima gambar tetapi gagal membacanya. "
-                            "Gunakan DEEPSEEK_API_KEY resmi di Render atau periksa dukungan vision penyedia.")
+        raise HTTPException(503, "SumoPod menerima gambar tetapi model belum berhasil membacanya. "
+                            "Periksa dukungan vision model pada SumoPod.")
     vision_probe_ok = True
 
 
