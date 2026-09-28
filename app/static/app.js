@@ -186,6 +186,8 @@ function renderDetail(item, markdown, engine, record) {
   grid.className = 'detail-grid';
   if (!imageFormats.has(item.extension) && item.extension !== 'pdf') grid.classList.add('text-only');
   let loadRegions;
+  let scanPdf;
+  let transcriptHint;
   if (imageFormats.has(item.extension)) {
     details.open = true;
     const source = makePane('Gambar sumber', 'Kotak: OCR lokal');
@@ -241,6 +243,9 @@ function renderDetail(item, markdown, engine, record) {
       } finally { loading = false; }
     };
   } else if (item.extension === 'pdf') {
+    details.open = true;
+    summary.textContent = 'Halaman PDF dan hasil OCR · klik untuk sembunyikan';
+    single.disabled = copy.disabled = true;
     const source = makePane('Halaman PDF dan kotak teks', 'Lapisan PDF + OCR lokal');
     const zoom = document.createElement('button');
     zoom.type = 'button';
@@ -262,7 +267,7 @@ function renderDetail(item, markdown, engine, record) {
     const retry = document.createElement('button');
     retry.type = 'button'; retry.textContent = 'Coba lagi'; retry.hidden = true;
     const scanAll = document.createElement('button');
-    scanAll.type = 'button'; scanAll.textContent = 'OCR seluruh halaman'; scanAll.disabled = true;
+    scanAll.type = 'button'; scanAll.textContent = 'Menyiapkan OCR otomatis…'; scanAll.disabled = true;
     controls.append(previous, pageLabel, next, retry, scanAll);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
@@ -294,6 +299,24 @@ function renderDetail(item, markdown, engine, record) {
     let scanning = false, cancelScan = false;
     const pageCache = new Map();
     const extractedPages = new Map();
+    const updateTranscript = (page, pageText, pageSource) => {
+      const sections = [...extractedPages].sort(([a], [b]) => a - b)
+        .map(([number, text]) => `## Halaman ${number} (OCR gambar)\n\n${text}`);
+      record.markdown = sections.length
+        ? `${markdown}\n\n---\n\n# Teks gambar yang diekstraksi\n\n${sections.join('\n\n')}`
+        : markdown;
+      if (sections.length) {
+        // Keep the scanned appendices visible, even when the original PDF text is long.
+        pre.textContent = `# Teks gambar yang diekstraksi\n\n${sections.join('\n\n')}\n\n---\n\n# Markdown dokumen\n\n${markdown}`;
+        transcriptHint.textContent = `MarkItDown + OCR lokal · ${sections.length} halaman gambar`;
+      } else {
+        const source = pageSource === 'pdf-text' ? 'lapisan teks PDF' : 'OCR gambar';
+        pre.textContent = pageText
+          ? `## Halaman ${page} (${source})\n\n${pageText}\n\n---\n\n## Markdown dokumen\n\n${markdown}`
+          : markdown || '(Tidak ada teks terdeteksi pada halaman ini)';
+      }
+      pre.scrollTop = 0;
+    };
     const showPage = async (page, refresh = false) => {
       if (loading) return;
       loading = true;
@@ -352,17 +375,11 @@ function renderDetail(item, markdown, engine, record) {
         totalPages = payload.total_pages;
         pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
         showRegions(layer, payload.regions, regionMessage);
-        const pageSource = payload.page_source === 'pdf-text' ? 'lapisan teks PDF' : 'OCR gambar';
         const pageText = payload.page_text.trim();
-        pre.textContent = pageText
-          ? `## Halaman ${page} (${pageSource})\n\n${pageText}\n\n---\n\n## Markdown dokumen\n\n${markdown}`
-          : markdown || '(Tidak ada teks terdeteksi pada halaman ini)';
         if (payload.page_source === 'tesseract' && pageText && !payload.warning) {
           extractedPages.set(page, pageText);
-          const sections = [...extractedPages].sort(([a], [b]) => a - b)
-            .map(([number, text]) => `## Halaman ${number} (OCR gambar)\n\n${text}`);
-          record.markdown = `${markdown}\n\n---\n\n# Teks gambar yang diekstraksi\n\n${sections.join('\n\n')}`;
         }
+        updateTranscript(page, pageText, payload.page_source);
         if (payload.warning) regionMessage.textContent = payload.warning;
         frame.hidden = !previewUrl;
         previewStatus.hidden = !!previewUrl;
@@ -401,34 +418,45 @@ function renderDetail(item, markdown, engine, record) {
     previous.addEventListener('click', () => void showPage(currentPage - 1));
     next.addEventListener('click', () => void showPage(currentPage + 1));
     retry.addEventListener('click', () => void showPage(currentPage, true));
-    scanAll.addEventListener('click', async () => {
-      if (scanning) {
-        cancelScan = true;
-        scanAll.textContent = 'Menghentikan OCR…';
-        return;
-      }
+    scanPdf = async () => {
+      if (scanning) return;
       scanning = true;
       cancelScan = false;
       const failedPages = [];
-      for (let page = 1; page <= totalPages && !cancelScan; page += 1) {
-        scanAll.textContent = `OCR halaman ${page}/${totalPages} · hentikan`;
+      // The first preview also supplies the total page count.
+      for (let page = 1; page <= (totalPages || 1) && !cancelScan; page += 1) {
+        scanAll.textContent = `OCR halaman ${page}/${totalPages || '?'} · hentikan`;
+        item.state.textContent = `OCR halaman ${page}/${totalPages || '?'}…`;
         if (!await showPage(page)) failedPages.push(page);
       }
       scanning = false;
-      previous.disabled = currentPage <= 1;
-      next.disabled = currentPage >= totalPages;
+      previous.disabled = !loaded || currentPage <= 1;
+      next.disabled = !loaded || currentPage >= totalPages;
       retry.disabled = false;
       scanAll.textContent = cancelScan ? 'Lanjutkan OCR seluruh halaman' : 'OCR seluruh halaman';
-      regionMessage.textContent = cancelScan
+      const message = cancelScan
         ? 'OCR dihentikan. Teks halaman yang sudah diproses tersedia untuk diunduh.'
         : failedPages.length
           ? `OCR selesai; halaman ${failedPages.join(', ')} belum terbaca. Buka halaman tersebut dan klik Coba lagi.`
           : 'OCR selesai. Teks gambar yang ditemukan telah ditambahkan ke unduhan Markdown.';
+      regionMessage.textContent = message;
+      item.state.textContent = cancelScan || failedPages.length
+        ? `Selesai sebagian · ${message}` : `Selesai · OCR ${totalPages} halaman`;
+      single.disabled = copy.disabled = false;
+      item.progress.value = 100;
+      return {failedPages, cancelled: cancelScan};
+    };
+    scanAll.addEventListener('click', () => {
+      if (scanning) {
+        cancelScan = true;
+        scanAll.textContent = 'Menghentikan OCR…';
+      } else void scanPdf();
     });
     loadRegions = async () => { if (!loaded) await showPage(1); };
   }
   const engineLabel = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
   const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
+  transcriptHint = transcript.querySelector('.detail-pane-head small');
   const pre = document.createElement('pre');
   pre.className = 'transcript';
   pre.textContent = markdown || '(Tidak ada teks terdeteksi)';
@@ -439,12 +467,14 @@ function renderDetail(item, markdown, engine, record) {
   note.textContent = imageFormats.has(item.extension)
     ? 'Kotak dan teks per area berasal dari Tesseract lokal. Hasil Markdown di sebelahnya berasal dari mesin yang tertera dan belum disejajarkan dengan kotak secara otomatis.'
     : item.extension === 'pdf'
-      ? 'Gunakan tombol Sebelumnya/Berikutnya untuk menelusuri halaman. Kotak berasal dari lapisan teks PDF dan OCR Tesseract lokal; hasil Markdown berasal dari mesin yang tertera dan dapat berbeda.'
+      ? 'OCR halaman PDF berjalan otomatis setelah konversi. Gunakan Sebelumnya/Berikutnya untuk menelusuri halaman; kotak berasal dari lapisan teks PDF dan OCR Tesseract lokal. Teks OCR gambar ditampilkan di awal panel kanan dan ditambahkan ke unduhan Markdown.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
   details.append(summary, grid, note);
-  if (loadRegions) details.addEventListener('toggle', () => { if (details.open) void loadRegions(); });
+  if (loadRegions && item.extension !== 'pdf') {
+    details.addEventListener('toggle', () => { if (details.open) void loadRegions(); });
+  }
   item.row.append(actions, details);
-  return loadRegions;
+  return scanPdf || loadRegions;
 }
 
 async function processQueue() {
@@ -456,16 +486,17 @@ async function processQueue() {
     updateStatus();
     try {
       const {markdown, engine} = await upload(item);
-      item.progress.value = 100;
-      item.row.classList.add('done');
       const label = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
-      item.state.textContent = markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
+      item.state.textContent = item.extension === 'pdf' ? 'Menyiapkan OCR halaman PDF…' :
+        markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       const record = {name: item.file.name, markdown};
-      completed.push(record);
       emptyState.hidden = true;
       const loadRegions = renderDetail(item, markdown, engine, record);
       updateStatus();
-      if (loadRegions && imageFormats.has(item.extension)) await loadRegions();
+      if (loadRegions && (imageFormats.has(item.extension) || item.extension === 'pdf')) await loadRegions();
+      item.progress.value = 100;
+      item.row.classList.add('done');
+      completed.push(record);
     } catch (error) { markError(item, error.message || 'Konversi gagal'); }
     updateStatus();
   }
