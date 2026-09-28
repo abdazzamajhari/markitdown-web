@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import logging
 import math
 import os
 import re
@@ -224,6 +225,8 @@ def verify_vision() -> None:
                             "Baca kode yang tercetak pada gambar. Balas hanya kode itu. "
                             "Jika gambar tidak terbaca, balas string kosong.", max_tokens=128)
     if code not in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
+        logging.getLogger(__name__).warning("SumoPod vision probe mismatch: expected=%s response=%r",
+                                            code, answer[:160])
         vision_probe_retry_at = now + 60
         raise HTTPException(503, "SumoPod menerima gambar tetapi model gagal membacanya. "
                             "Periksa dukungan vision model pada SumoPod.")
