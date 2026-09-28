@@ -187,10 +187,10 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
     if result.status_code in {401, 403}:
         raise HTTPException(503, f"Kunci {provider} tidak valid atau tidak diizinkan")
     if result.status_code == 402:
-        detail = ("Saldo API DeepSeek tidak mencukupi (HTTP 402). Periksa saldo akun DeepSeek."
+        detail = ("Saldo API DeepSeek tidak mencukupi (HTTP 402). Periksa saldo akun DeepSeek. Model vision-exp belum tercantum sebagai model gambar API resmi; mengisi saldo tidak menjamin OCR berhasil."
                   if provider == "DeepSeek" else
                   "SumoPod menolak OCR (HTTP 402: pembayaran atau kredit diperlukan). "
-                  "Periksa saldo/paket SumoPod, atau atur DEEPSEEK_API_KEY resmi di Render.")
+                  "Periksa saldo/paket dan dukungan gambar untuk model ini pada SumoPod.")
         raise HTTPException(402, detail)
     if result.status_code == 429:
         raise HTTPException(429, f"Batas pemakaian {provider} tercapai; coba lagi nanti",
@@ -233,7 +233,7 @@ def verify_vision() -> None:
     if code not in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
         vision_probe_retry_at = now + 60
         raise HTTPException(503, "Penyedia DeepSeek menerima gambar tetapi gagal membacanya. "
-                            "Gunakan DEEPSEEK_API_KEY resmi di Render atau periksa dukungan vision penyedia.")
+                            "Periksa apakah model deepseek-v4-flash-vision-exp benar-benar mendukung gambar pada penyedia aktif.")
     vision_probe_ok = True
 
 
