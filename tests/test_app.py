@@ -56,8 +56,8 @@ def test_home_and_configuration(client, monkeypatch):
     assert client.get("/api/capabilities").json() == {"image_ocr": "unavailable", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "official-key")
-    assert client.get("/api/capabilities").json() == {"image_ocr": "deepseek", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ignored-key")
+    assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
     assert "MarkItDown Web" in client.get("/").text
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
 
@@ -109,13 +109,14 @@ def test_deepseek_is_only_image_ocr_and_region_source(client, monkeypatch):
     assert seen[0][1]["json"]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
-def test_official_deepseek_key_is_preferred(client, monkeypatch):
+def test_only_sumopod_key_is_used(client, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ignored-key")
+    assert upload(client, "gambar.png", image_bytes()).status_code == 503
     monkeypatch.setenv("SUMOPOD_API_KEY", "proxy-key")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "official-key")
     seen = fake_provider(monkeypatch)
     assert upload(client, "gambar.png", image_bytes()).status_code == 200
-    assert seen[0][0] == "https://api.deepseek.com/chat/completions"
-    assert seen[0][1]["headers"]["Authorization"] == "Bearer official-key"
+    assert seen[0][0] == "https://ai.sumopod.com/v1/chat/completions"
+    assert seen[0][1]["headers"]["Authorization"] == "Bearer proxy-key"
 
 
 def test_deepseek_plain_text_and_provider_failure(client, monkeypatch):
@@ -155,9 +156,10 @@ def test_payment_failure_keeps_pdf_preview_without_fake_ocr(client, monkeypatch)
 
     image = upload(client, "gambar.png", image_bytes())
     assert image.status_code == 402 and "pembayaran atau kredit" in image.json()["detail"]
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "official-key")
-    official = upload(client, "gambar.png", image_bytes())
-    assert official.status_code == 402 and "Saldo API DeepSeek" in official.json()["detail"]
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ignored-key")
+    again = upload(client, "gambar.png", image_bytes())
+    assert again.status_code == 402 and "SumoPod menolak OCR" in again.json()["detail"]
+    assert all(url == "https://ai.sumopod.com/v1/chat/completions" for url in calls)
 
 
 def test_empty_provider_result_is_not_reported_as_success(client, monkeypatch):
