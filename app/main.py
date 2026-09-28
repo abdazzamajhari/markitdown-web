@@ -213,15 +213,14 @@ def verify_vision() -> None:
     if now < vision_probe_retry_at:
         raise HTTPException(503, "SumoPod belum dapat membaca gambar; coba lagi nanti")
     from PIL import Image, ImageDraw, ImageFont
-    code = secrets.token_hex(4).upper()
-    with Image.new("RGB", (600, 130), "white") as sample:
+    code = "".join(secrets.choice("2345679") for _ in range(4))
+    with Image.new("RGB", (600, 300), "white") as sample:
         draw = ImageDraw.Draw(sample)
-        draw.text((40, 33), code, fill="black", font=ImageFont.load_default(size=56))
+        draw.text((130, 90), code, fill="black", font=ImageFont.load_default(size=96))
         buffer = BytesIO()
-        sample.save(buffer, format="JPEG", quality=90)
+        sample.save(buffer, format="JPEG", quality=95)
     answer = request_vision(buffer.getvalue(), "image/jpeg",
-                            "Baca kode yang tercetak pada gambar. Balas hanya kode itu. "
-                            "Jika gambar tidak terbaca, balas string kosong.", max_tokens=128)
+                            "Baca empat angka besar pada gambar. Balas hanya angkanya.", max_tokens=512)
     if code not in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
         logging.getLogger(__name__).warning("SumoPod vision probe mismatch: expected=%s response=%r",
                                             code, answer[:160])
