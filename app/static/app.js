@@ -303,6 +303,7 @@ function renderDetail(item, markdown, engine, record) {
     source.append(controls, legend, scroll, regionMessage);
     grid.append(source);
     let currentPage = 1, totalPages = 0, loading = false, loaded = false, previewUrl = null;
+    let lastPreviewError = '';
     let scanning = false, cancelScan = false;
     const pageCache = new Map();
     const extractedPages = new Map();
@@ -396,8 +397,10 @@ function renderDetail(item, markdown, engine, record) {
         retry.hidden = !payload.warning;
         if (!payload.warning || payload.page_source === 'deepseek') pageCache.set(page, payload);
         loaded = true;
+        lastPreviewError = '';
         return !payload.warning || payload.page_source === 'deepseek';
       } catch (error) {
+        lastPreviewError = error.message;
         if (pendingUrl) { URL.revokeObjectURL(pendingUrl); objectUrls.delete(pendingUrl); }
         if (previewUrl) { URL.revokeObjectURL(previewUrl); objectUrls.delete(previewUrl); previewUrl = null; }
         image.removeAttribute('src'); image.hidden = true;
@@ -452,7 +455,7 @@ function renderDetail(item, markdown, engine, record) {
         ? `Selesai sebagian · ${message}` : `Selesai · ${transcriptEngine} ${totalPages} halaman`;
       single.disabled = copy.disabled = false;
       item.progress.value = 100;
-      return {failedPages, cancelled: cancelScan};
+      return {failedPages, cancelled: cancelScan, error: lastPreviewError};
     };
     scanAll.addEventListener('click', () => {
       if (scanning) {
@@ -511,7 +514,10 @@ async function processQueue() {
       emptyState.hidden = true;
       const loadRegions = renderDetail(item, markdown, engine, record);
       updateStatus();
-      if (loadRegions && (imageFormats.has(item.extension) || item.extension === 'pdf')) await loadRegions();
+      if (loadRegions && (imageFormats.has(item.extension) || item.extension === 'pdf')) {
+        const scan = await loadRegions();
+        if (scan?.failedPages.length) throw new Error(scan.error || `OCR gagal pada halaman ${scan.failedPages.join(', ')}`);
+      }
       item.progress.value = 100;
       item.row.classList.add('done');
       completed.push(record);
@@ -562,8 +568,8 @@ window.addEventListener('pagehide', () => { for (const url of objectUrls) URL.re
 fetch('/api/capabilities', {cache: 'no-store'})
   .then((response) => response.json())
   .then(({image_ocr, image_ocr_model}) => {
-    ocrMode.textContent = image_ocr === 'sumopod'
-      ? `OCR PDF dan gambar: ${image_ocr_model} melalui SumoPod. PDF maksimal 30 halaman.`
-      : 'OCR tidak tersedia: atur SUMOPOD_API_KEY untuk DeepSeek V4 Flash Vision.';
+    ocrMode.textContent = image_ocr !== 'unavailable'
+      ? `OCR PDF dan gambar: ${image_ocr_model} melalui ${image_ocr === 'deepseek' ? 'API resmi DeepSeek' : 'SumoPod'}. PDF maksimal 30 halaman.`
+      : 'OCR tidak tersedia: atur DEEPSEEK_API_KEY atau SUMOPOD_API_KEY.';
   })
   .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });

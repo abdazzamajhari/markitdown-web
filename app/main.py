@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -34,7 +35,10 @@ MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 MAX_REQUESTS_PER_MINUTE = 12
 SUMOPOD_URL = "https://ai.sumopod.com/v1/chat/completions"
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 SUMOPOD_MODEL = "deepseek-v4-flash-vision-exp"
+vision_probe_ok = False
+vision_probe_retry_at = 0.0
 OCR_PROMPT = (
     "Read every visible line in this document image, including screenshots, headings, stamps and tables. "
     "Preserve the language, spelling, numbers and reading order; represent tables in Markdown. "
@@ -144,16 +148,24 @@ def convert_pdf(data: bytes) -> tuple[str, str]:
     return markdown, engine
 
 
-def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False) -> dict:
+def vision_provider() -> tuple[str, str, str]:
+    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if key:
+        return DEEPSEEK_URL, key, "DeepSeek"
     key = os.environ.get("SUMOPOD_API_KEY", "").strip()
-    if not key:
-        raise HTTPException(503, "Kunci SumoPod belum dikonfigurasi")
+    if key:
+        return SUMOPOD_URL, key, "SumoPod"
+    raise HTTPException(503, "Atur DEEPSEEK_API_KEY atau SUMOPOD_API_KEY untuk OCR")
+
+
+def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 8192) -> str:
+    url, key, provider = vision_provider()
     if len(image) > MAX_BYTES:
         raise HTTPException(413, "Gambar terlalu besar untuk OCR AI")
     payload = {
         "model": SUMOPOD_MODEL,
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": OCR_PROMPT},
+            {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {
                 "url": f"data:{mime_type};base64," + base64.b64encode(image).decode("ascii"),
                 "detail": "high",
@@ -161,36 +173,67 @@ def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False)
         ]}],
         "temperature": 0,
         "thinking": {"type": "disabled"},
-        "max_tokens": 8192,
+        "max_tokens": max_tokens,
         "stream": False,
     }
     try:
         result = httpx.post(
-            SUMOPOD_URL, json=payload,
+            url, json=payload,
             headers={"Authorization": "Bearer " + key},
             timeout=80, follow_redirects=False,
         )
     except httpx.HTTPError:
-        raise HTTPException(502, "SumoPod tidak dapat dihubungi") from None
+        raise HTTPException(502, f"{provider} tidak dapat dihubungi") from None
     if result.status_code in {401, 403}:
-        raise HTTPException(503, "Kunci SumoPod tidak valid atau tidak diizinkan")
+        raise HTTPException(503, f"Kunci {provider} tidak valid atau tidak diizinkan")
     if result.status_code == 429:
-        raise HTTPException(429, "Batas pemakaian SumoPod tercapai; coba lagi nanti",
+        raise HTTPException(429, f"Batas pemakaian {provider} tercapai; coba lagi nanti",
                             headers={"Retry-After": "60"})
     if result.status_code != 200:
-        raise HTTPException(502, f"SumoPod mengembalikan HTTP {result.status_code}")
+        raise HTTPException(502, f"{provider} mengembalikan HTTP {result.status_code}")
     if len(result.content) > MAX_OUTPUT_BYTES + 65536:
-        raise HTTPException(502, "Jawaban SumoPod terlalu besar")
+        raise HTTPException(502, f"Jawaban {provider} terlalu besar")
     try:
         choice = result.json()["choices"][0]
         content = choice["message"]["content"]
         if not isinstance(content, str):
             raise ValueError
     except (KeyError, IndexError, TypeError, ValueError):
-        raise HTTPException(502, "Jawaban SumoPod tidak valid") from None
+        raise HTTPException(502, f"Jawaban {provider} tidak valid") from None
     content = content.strip()
     if choice.get("finish_reason") == "length":
         raise HTTPException(502, "Transkripsi DeepSeek terpotong; coba lagi pada halaman ini")
+    return content
+
+
+def verify_vision() -> None:
+    """Reject providers that accept an image but silently route it to a text-only model."""
+    global vision_probe_ok, vision_probe_retry_at
+    if vision_probe_ok:
+        return
+    now = time.monotonic()
+    if now < vision_probe_retry_at:
+        raise HTTPException(503, "Penyedia DeepSeek belum dapat membaca gambar; coba lagi nanti")
+    from PIL import Image, ImageDraw, ImageFont
+    code = secrets.token_hex(4).upper()
+    with Image.new("RGB", (600, 130), "white") as sample:
+        draw = ImageDraw.Draw(sample)
+        draw.text((40, 33), code, fill="black", font=ImageFont.load_default(size=56))
+        buffer = BytesIO()
+        sample.save(buffer, format="JPEG", quality=90)
+    answer = request_vision(buffer.getvalue(), "image/jpeg",
+                            "Baca kode yang tercetak pada gambar. Balas hanya kode itu. "
+                            "Jika gambar tidak terbaca, balas string kosong.", max_tokens=128)
+    if code not in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
+        vision_probe_retry_at = now + 60
+        raise HTTPException(503, "Penyedia DeepSeek menerima gambar tetapi gagal membacanya. "
+                            "Gunakan DEEPSEEK_API_KEY resmi di Render atau periksa dukungan vision penyedia.")
+    vision_probe_ok = True
+
+
+def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False) -> dict:
+    verify_vision()
+    content = request_vision(image, mime_type, OCR_PROMPT)
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content).strip()
     try:
@@ -237,9 +280,11 @@ async def health():
 
 @app.get("/api/capabilities")
 async def capabilities():
-    if os.environ.get("SUMOPOD_API_KEY", "").strip():
-        return {"image_ocr": "sumopod", "image_ocr_model": SUMOPOD_MODEL}
-    return {"image_ocr": "unavailable", "image_ocr_model": SUMOPOD_MODEL}
+    try:
+        _, _, provider = vision_provider()
+    except HTTPException:
+        provider = "unavailable"
+    return {"image_ocr": provider.lower(), "image_ocr_model": SUMOPOD_MODEL}
 
 
 @app.get("/", include_in_schema=False)
@@ -269,8 +314,7 @@ async def image_regions(request: Request):
             raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
         data.extend(chunk)
     validate_content(data, extension)
-    if not os.environ.get("SUMOPOD_API_KEY", "").strip():
-        raise HTTPException(503, "Kunci SumoPod untuk DeepSeek belum dikonfigurasi")
+    vision_provider()
     async with quota_lock:
         now = time.monotonic()
         while region_requests and region_requests[0] <= now - 60:
@@ -305,8 +349,7 @@ async def pdf_preview(request: Request, page: int = 1):
             raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
         data.extend(chunk)
     validate_content(data, extension)
-    if not os.environ.get("SUMOPOD_API_KEY", "").strip():
-        raise HTTPException(503, "Kunci SumoPod untuk DeepSeek belum dikonfigurasi")
+    vision_provider()
     async with quota_lock:
         now = time.monotonic()
         while region_requests and region_requests[0] <= now - 60:
@@ -353,8 +396,8 @@ async def convert_file(request: Request):
             raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
         data.extend(chunk)
     validate_content(data, extension)
-    if (extension in IMAGE_FORMATS or extension == ".pdf") and not os.environ.get("SUMOPOD_API_KEY", "").strip():
-        raise HTTPException(503, "Kunci SumoPod untuk DeepSeek belum dikonfigurasi")
+    if extension in IMAGE_FORMATS or extension == ".pdf":
+        vision_provider()
     # Bound simultaneous traffic; the browser waits and retries a temporary 429.
     async with quota_lock:
         now = time.monotonic()

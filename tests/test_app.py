@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app import worker
+from app import main as app_main, worker
 from app.main import app, recent_requests, region_requests
 
 
@@ -17,6 +17,8 @@ def client(monkeypatch):
     recent_requests.clear()
     region_requests.clear()
     monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(app_main, "verify_vision", lambda: None)
     return TestClient(app)
 
 
@@ -54,6 +56,8 @@ def test_home_and_configuration(client, monkeypatch):
     assert client.get("/api/capabilities").json() == {"image_ocr": "unavailable", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "official-key")
+    assert client.get("/api/capabilities").json() == {"image_ocr": "deepseek", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
     assert "MarkItDown Web" in client.get("/").text
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
 
@@ -105,6 +109,15 @@ def test_deepseek_is_only_image_ocr_and_region_source(client, monkeypatch):
     assert seen[0][1]["json"]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
+def test_official_deepseek_key_is_preferred(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "proxy-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "official-key")
+    seen = fake_provider(monkeypatch)
+    assert upload(client, "gambar.png", image_bytes()).status_code == 200
+    assert seen[0][0] == "https://api.deepseek.com/chat/completions"
+    assert seen[0][1]["headers"]["Authorization"] == "Bearer official-key"
+
+
 def test_deepseek_plain_text_and_provider_failure(client, monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     monkeypatch.setattr("app.main.httpx.post", lambda *a, **kw: httpx.Response(
@@ -122,6 +135,18 @@ def test_empty_provider_result_is_not_reported_as_success(client, monkeypatch):
     assert response.status_code == 502 and "OCR kosong" in response.json()["detail"]
     preview = upload(client, "scan.pdf", pdf_bytes(), "/api/pdf-preview?page=1")
     assert preview.status_code == 502 and "OCR kosong" in preview.json()["detail"]
+
+
+def test_rejects_provider_that_ignores_image(monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(app_main, "request_vision", lambda *args, **kwargs: "Unrelated invented text")
+    monkeypatch.setattr(app_main, "vision_probe_ok", False)
+    monkeypatch.setattr(app_main, "vision_probe_retry_at", 0.0)
+    with pytest.raises(app_main.HTTPException) as caught:
+        app_main.verify_vision()
+    assert caught.value.status_code == 503
+    assert "gagal membacanya" in caught.value.detail
 
 
 def test_pdf_ocr_each_page_and_boxes(client, monkeypatch):

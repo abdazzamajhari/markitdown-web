@@ -1,6 +1,6 @@
 # MarkItDown Web
 
-Aplikasi web mandiri untuk mengubah dokumen menjadi Markdown. Teks yang dapat dipilih diekstraksi dengan [microsoft/markitdown](https://github.com/microsoft/markitdown); OCR gambar dan seluruh halaman PDF memakai **`deepseek-v4-flash-vision-exp` melalui SumoPod**. Proyek ini bukan layanan resmi Microsoft, DeepSeek, atau SumoPod.
+Aplikasi web mandiri untuk mengubah dokumen menjadi Markdown. Teks yang dapat dipilih diekstraksi dengan [microsoft/markitdown](https://github.com/microsoft/markitdown); OCR gambar dan seluruh halaman PDF memakai **`deepseek-v4-flash-vision-exp`** melalui API DeepSeek resmi atau SumoPod. Proyek ini bukan layanan resmi Microsoft, DeepSeek, atau SumoPod.
 
 ## Fitur
 
@@ -19,15 +19,15 @@ Python 3.12 dan Poppler diperlukan. Di Debian/Ubuntu, instal `poppler-utils`.
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-export SUMOPOD_API_KEY='kunci-anda'
+export DEEPSEEK_API_KEY='kunci-resmi-anda'
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Atau jalankan Dockerfile. `SUMOPOD_API_KEY` wajib untuk OCR gambar dan PDF; simpan sebagai environment variable di Render, jangan taruh di repositori atau antarmuka web. Endpoint OpenAI-compatible yang digunakan adalah `https://ai.sumopod.com/v1/chat/completions` dengan model **`deepseek-v4-flash-vision-exp` saja**. Mode thinking dimatikan agar OCR langsung menghasilkan teks. Respons OCR kosong pada halaman PDF yang diproses ditampilkan sebagai kesalahan, sehingga berkas tidak keliru ditandai berhasil. Aplikasi tidak mengganti kegagalan penyedia dengan model lain.
+Atau jalankan Dockerfile. Untuk OCR gambar dan PDF, atur `DEEPSEEK_API_KEY` (diutamakan, API resmi `https://api.deepseek.com/chat/completions`) atau `SUMOPOD_API_KEY` (`https://ai.sumopod.com/v1/chat/completions`) sebagai environment variable di Render. Jangan taruh kunci di repositori atau antarmuka web. Kedua jalur hanya mengirim model **`deepseek-v4-flash-vision-exp`**. Mode thinking dimatikan. Sebelum OCR pertama, aplikasi meminta model membaca kode uji acak dari gambar; bila penyedia menerima gambar tetapi tidak membacanya, OCR mengembalikan kesalahan yang jelas. Respons OCR kosong pada halaman PDF juga tidak ditandai berhasil. Hasil dari penyedia tetap perlu diperiksa terhadap halaman asli.
 
-Menurut [catatan perubahan resmi DeepSeek](https://api-docs.deepseek.com/updates/), ID `deepseek-v4-flash-vision-exp` telah menjadi alias kompatibilitas yang diarahkan ke V4.1 Flash pada API resmi DeepSeek. Aplikasi tetap mengirim ID yang diminta ke SumoPod; perutean aktual dan ketersediaan ID di SumoPod bergantung pada penyedia tersebut.
+Menurut [catatan perubahan resmi DeepSeek](https://api-docs.deepseek.com/updates/), ID `deepseek-v4-flash-vision-exp` telah menjadi alias kompatibilitas yang diarahkan ke V4.1 Flash pada API resmi DeepSeek. Aplikasi tetap mengirim ID yang diminta; perutean aktual di SumoPod bergantung pada penyedia tersebut.
 
-Halaman PDF dan gambar diunggah ke SumoPod saat OCR dijalankan. Periksa kebijakan data dan biaya penyedia sebelum memakai dokumen sensitif. Aplikasi tidak menyimpan berkas secara permanen; daftar hasil di browser hilang setelah halaman dimuat ulang. Banyak PDF berarti banyak panggilan model, satu untuk setiap halaman dan satu tambahan untuk pemetaan kotak gambar biasa.
+Halaman PDF dan gambar diunggah ke penyedia yang dikonfigurasi saat OCR dijalankan. Periksa kebijakan data dan biaya penyedia sebelum memakai dokumen sensitif. Aplikasi tidak menyimpan berkas secara permanen; daftar hasil di browser hilang setelah halaman dimuat ulang. Banyak PDF berarti banyak panggilan model, satu untuk setiap halaman dan satu tambahan untuk pemetaan kotak gambar biasa.
 
 ## API
 
@@ -46,7 +46,7 @@ Layanan menerima maksimal 12 permintaan konversi dan 12 permintaan pratinjau per
 
 ## GitHub dan Render
 
-Sumber kode: [abdazzamajhari/markitdown-web](https://github.com/abdazzamajhari/markitdown-web). Hubungkan repositori ini sebagai Render Blueprint memakai `render.yaml`, lalu atur `SUMOPOD_API_KEY` di Environment. Build Docker memasang Poppler untuk render PDF. Render memakai instance `free` untuk percobaan; memori 512 MB dan batas waktu penyedia bisa memengaruhi dokumen besar. Periksa kebijakan biaya SumoPod untuk pemakaian banyak halaman.
+Sumber kode: [abdazzamajhari/markitdown-web](https://github.com/abdazzamajhari/markitdown-web). Hubungkan repositori ini sebagai Render Blueprint memakai `render.yaml`, lalu atur `DEEPSEEK_API_KEY` di Environment untuk API resmi; `SUMOPOD_API_KEY` tetap dapat dipakai jika vision berfungsi. Build Docker memasang Poppler untuk render PDF. Render memakai instance `free` untuk percobaan; memori 512 MB dan batas waktu penyedia bisa memengaruhi dokumen besar. Periksa kebijakan biaya penyedia untuk pemakaian banyak halaman.
 
 ```bash
 pip install -r requirements-dev.txt
