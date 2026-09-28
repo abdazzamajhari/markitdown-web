@@ -42,6 +42,10 @@ curl -f -X POST 'http://127.0.0.1:8000/api/convert' \
 
 Untuk PDF, `/api/convert` mengembalikan teks lapisan dokumen yang tersedia. Antarmuka kemudian memanggil `POST /api/pdf-preview?page=N` pada setiap halaman, memakai berkas PDF yang sama, untuk memperoleh gambar, transkripsi DeepSeek (`page_text`, `page_source: deepseek`), dan `regions`. Antarmuka merakit Markdown akhir setelah semua halaman selesai. `POST /api/regions` memetakan kotak pada gambar biasa melalui DeepSeek. `GET /api/capabilities` menampilkan model OCR yang aktif; `GET /health` menampilkan status layanan.
 
+Jika OCR penyedia gagal, `/api/pdf-preview` tetap mengirim gambar halaman dan kotak dari lapisan teks PDF, disertai `ocr_error` dan `ocr_status`. Antarmuka menandai berkas gagal serta menonaktifkan unduhan Markdown lengkap; halaman lain masih dapat dijelajahi sebagai pratinjau tanpa memanggil model lagi. `preview_only=true` meminta gambar halaman tanpa OCR. Teks lapisan PDF yang muncul di panel bukan transkripsi tulisan dalam gambar.
+
+**HTTP 402:** akun penyedia yang aktif menolak permintaan karena pembayaran/kredit. Periksa saldo atau paket pada akun penyedia tersebut. Pada [API resmi DeepSeek](https://api-docs.deepseek.com/quick_start/error_codes/), HTTP 402 berarti saldo tidak mencukupi; jika memakai SumoPod, lihat status kredit/paket SumoPod. `DEEPSEEK_API_KEY` yang valid dan bersaldo akan diprioritaskan jika diatur di Render. Setelah memperbaiki akses penyedia, unggah ulang berkas untuk OCR seluruh halaman.
+
 Layanan menerima maksimal 12 permintaan konversi dan 12 permintaan pratinjau per menit per instans. Ini pembatas laju, **bukan batas jumlah PDF**: antarmuka menunggu `Retry-After` dan melanjutkan antrean. Hanya satu pemrosesan aktif per instans. PDF dengan lebih dari 30 halaman ditolak HTTP 413 dengan keterangan Dilewati.
 
 ## GitHub dan Render

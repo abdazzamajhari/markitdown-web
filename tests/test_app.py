@@ -128,13 +128,47 @@ def test_deepseek_plain_text_and_provider_failure(client, monkeypatch):
     assert response.status_code == 502 and "HTTP 400" in response.json()["detail"]
 
 
+def test_payment_failure_keeps_pdf_preview_without_fake_ocr(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    calls = []
+
+    def payment_required(url, **kwargs):
+        calls.append(url)
+        return httpx.Response(402)
+
+    monkeypatch.setattr("app.main.httpx.post", payment_required)
+    pdf = pdf_bytes(2)
+    response = upload(client, "scan.pdf", pdf, "/api/pdf-preview?page=1")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["image"].startswith("data:image/jpeg;base64,")
+    assert payload["total_pages"] == 2 and payload["page_text"] == ""
+    assert payload["page_source"] is None and payload["ocr_status"] == 402
+    assert "SumoPod menolak OCR" in payload["ocr_error"]
+    assert len(calls) == 1
+
+    second = upload(client, "scan.pdf", pdf, "/api/pdf-preview?page=2&preview_only=true")
+    assert second.status_code == 200
+    assert second.json()["image"].startswith("data:image/jpeg;base64,")
+    assert second.json()["preview_only"] is True
+    assert len(calls) == 1
+
+    image = upload(client, "gambar.png", image_bytes())
+    assert image.status_code == 402 and "pembayaran atau kredit" in image.json()["detail"]
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "official-key")
+    official = upload(client, "gambar.png", image_bytes())
+    assert official.status_code == 402 and "Saldo API DeepSeek" in official.json()["detail"]
+
+
 def test_empty_provider_result_is_not_reported_as_success(client, monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     fake_provider(monkeypatch, markdown="")
     response = upload(client, "gambar.png", image_bytes())
     assert response.status_code == 502 and "OCR kosong" in response.json()["detail"]
     preview = upload(client, "scan.pdf", pdf_bytes(), "/api/pdf-preview?page=1")
-    assert preview.status_code == 502 and "OCR kosong" in preview.json()["detail"]
+    assert preview.status_code == 200 and preview.json()["ocr_status"] == 502
+    assert "OCR kosong" in preview.json()["ocr_error"]
+    assert preview.json()["image"].startswith("data:image/jpeg;base64,")
 
 
 def test_rejects_provider_that_ignores_image(monkeypatch):

@@ -186,6 +186,12 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
         raise HTTPException(502, f"{provider} tidak dapat dihubungi") from None
     if result.status_code in {401, 403}:
         raise HTTPException(503, f"Kunci {provider} tidak valid atau tidak diizinkan")
+    if result.status_code == 402:
+        detail = ("Saldo API DeepSeek tidak mencukupi (HTTP 402). Periksa saldo akun DeepSeek."
+                  if provider == "DeepSeek" else
+                  "SumoPod menolak OCR (HTTP 402: pembayaran atau kredit diperlukan). "
+                  "Periksa saldo/paket SumoPod, atau atur DEEPSEEK_API_KEY resmi di Render.")
+        raise HTTPException(402, detail)
     if result.status_code == 429:
         raise HTTPException(429, f"Batas pemakaian {provider} tercapai; coba lagi nanti",
                             headers={"Retry-After": "60"})
@@ -333,7 +339,7 @@ async def image_regions(request: Request):
 
 
 @app.post("/api/pdf-preview")
-async def pdf_preview(request: Request, page: int = 1):
+async def pdf_preview(request: Request, page: int = 1, preview_only: bool = False):
     """Render a PDF page and transcribe its image with the configured vision model."""
     _, extension = validate_filename(request.headers.get("x-filename"))
     if extension != ".pdf":
@@ -349,17 +355,20 @@ async def pdf_preview(request: Request, page: int = 1):
             raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
         data.extend(chunk)
     validate_content(data, extension)
-    vision_provider()
+    if not preview_only:
+        vision_provider()
     async with quota_lock:
-        now = time.monotonic()
-        while region_requests and region_requests[0] <= now - 60:
-            region_requests.popleft()
-        if len(region_requests) >= 12:
-            delay = max(1, math.ceil(60 - (now - region_requests[0])))
-            raise HTTPException(429, f"Batas pratinjau tercapai; coba lagi dalam {delay} detik", headers={"Retry-After": str(delay)})
+        if not preview_only:
+            now = time.monotonic()
+            while region_requests and region_requests[0] <= now - 60:
+                region_requests.popleft()
+            if len(region_requests) >= 12:
+                delay = max(1, math.ceil(60 - (now - region_requests[0])))
+                raise HTTPException(429, f"Batas pratinjau tercapai; coba lagi dalam {delay} detik", headers={"Retry-After": str(delay)})
         if slots.locked():
             raise HTTPException(429, "Server sedang memproses berkas lain; coba lagi sebentar", headers={"Retry-After": "3"})
-        region_requests.append(now)
+        if not preview_only:
+            region_requests.append(now)
     async with slots:
         output = await run_in_threadpool(run_worker, bytes(data), extension, f"pdf-preview:{page}")
         if len(output) > MAX_OUTPUT_BYTES:
@@ -368,19 +377,28 @@ async def pdf_preview(request: Request, page: int = 1):
             payload = json.loads(output)
         except (ValueError, UnicodeDecodeError):
             raise HTTPException(502, "Pratinjau PDF tidak valid") from None
-        if payload.get("image"):
+        if payload.get("image") and not preview_only:
             try:
                 jpeg = base64.b64decode(payload["image"].split(",", 1)[1], validate=True)
             except (ValueError, IndexError):
                 raise HTTPException(502, "Gambar halaman PDF tidak valid") from None
-            analysis = await run_in_threadpool(analyze_deepseek, jpeg, "image/jpeg")
-            from app.worker import merge_regions
-            payload["page_text"] = analysis["markdown"]
-            payload["regions"] = merge_regions(payload["regions"], analysis["regions"])
-            payload["page_source"] = "deepseek"
-            payload["engine"] = SUMOPOD_MODEL
-            if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT_BYTES:
-                raise HTTPException(413, "Pratinjau PDF terlalu besar")
+            try:
+                analysis = await run_in_threadpool(analyze_deepseek, jpeg, "image/jpeg")
+            except HTTPException as exc:
+                if exc.status_code not in {402, 502, 503}:
+                    raise
+                payload["ocr_error"] = exc.detail
+                payload["ocr_status"] = exc.status_code
+            else:
+                from app.worker import merge_regions
+                payload["page_text"] = analysis["markdown"]
+                payload["regions"] = merge_regions(payload["regions"], analysis["regions"])
+                payload["page_source"] = "deepseek"
+                payload["engine"] = SUMOPOD_MODEL
+        if preview_only:
+            payload["preview_only"] = True
+        if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT_BYTES:
+            raise HTTPException(413, "Pratinjau PDF terlalu besar")
     return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 

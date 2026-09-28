@@ -303,7 +303,7 @@ function renderDetail(item, markdown, engine, record) {
     source.append(controls, legend, scroll, regionMessage);
     grid.append(source);
     let currentPage = 1, totalPages = 0, loading = false, loaded = false, previewUrl = null;
-    let lastPreviewError = '';
+    let lastPreviewError = '', fatalOcrError = false;
     let scanning = false, cancelScan = false;
     const pageCache = new Map();
     const extractedPages = new Map();
@@ -345,7 +345,8 @@ function renderDetail(item, markdown, engine, record) {
         if (!payload) {
           let response;
           while (true) {
-            response = await fetch(`/api/pdf-preview?page=${page}`, {
+            const previewOnly = fatalOcrError && !refresh;
+            response = await fetch(`/api/pdf-preview?page=${page}${previewOnly ? '&preview_only=true' : ''}`, {
               method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
               body: item.file,
             });
@@ -389,16 +390,26 @@ function renderDetail(item, markdown, engine, record) {
           extractedPages.set(page, pageText);
         }
         updateTranscript(page, pageText, payload.page_source);
-        if (payload.warning) regionMessage.textContent = payload.warning;
+        if (payload.ocr_error) {
+          lastPreviewError = payload.ocr_error;
+          fatalOcrError = payload.ocr_status === 402 || payload.ocr_status === 503;
+          regionMessage.textContent = `${payload.ocr_error} Gambar PDF tetap ditampilkan; teks di sebelah kanan berasal dari lapisan PDF saja.`;
+        } else if (payload.preview_only) {
+          regionMessage.textContent = 'Pratinjau PDF tanpa OCR. Setelah akses API pulih, unggah ulang berkas untuk mengekstraksi semua halaman.';
+        } else if (payload.warning) {
+          regionMessage.textContent = payload.warning;
+        } else {
+          lastPreviewError = '';
+          fatalOcrError = false;
+        }
         frame.hidden = !previewUrl;
         previewStatus.hidden = !!previewUrl;
         previewStatus.classList.toggle('is-error', !previewUrl);
         if (!previewUrl) previewStatus.textContent = 'Halaman ini belum dapat ditampilkan.';
-        retry.hidden = !payload.warning;
-        if (!payload.warning || payload.page_source === 'deepseek') pageCache.set(page, payload);
+        retry.hidden = !payload.warning && !payload.ocr_error && !payload.preview_only;
+        if (!payload.warning && !payload.ocr_error && !payload.preview_only) pageCache.set(page, payload);
         loaded = true;
-        lastPreviewError = '';
-        return !payload.warning || payload.page_source === 'deepseek';
+        return !payload.warning && !payload.ocr_error && !payload.preview_only;
       } catch (error) {
         lastPreviewError = error.message;
         if (pendingUrl) { URL.revokeObjectURL(pendingUrl); objectUrls.delete(pendingUrl); }
@@ -438,22 +449,32 @@ function renderDetail(item, markdown, engine, record) {
       for (let page = 1; page <= (totalPages || 1) && !cancelScan; page += 1) {
         scanAll.textContent = `OCR halaman ${page}/${totalPages || '?'} · hentikan`;
         item.state.textContent = `OCR halaman ${page}/${totalPages || '?'}…`;
-        if (!await showPage(page)) failedPages.push(page);
+        if (!await showPage(page)) {
+          failedPages.push(page);
+          if (fatalOcrError) break;
+        }
       }
       scanning = false;
       previous.disabled = !loaded || currentPage <= 1;
       next.disabled = !loaded || currentPage >= totalPages;
       retry.disabled = false;
       scanAll.textContent = cancelScan ? 'Lanjutkan OCR seluruh halaman' : 'OCR seluruh halaman';
+      scanAll.disabled = fatalOcrError;
       const message = cancelScan
         ? 'OCR dihentikan. Teks halaman yang sudah diproses tersedia untuk diunduh.'
         : failedPages.length
-          ? `OCR selesai; halaman ${failedPages.join(', ')} belum terbaca. Buka halaman tersebut dan klik Coba lagi.`
+          ? fatalOcrError
+            ? 'OCR dihentikan karena akses penyedia ditolak. Pratinjau halaman tetap tersedia. Perbaiki akses API, lalu unggah ulang berkas untuk OCR lengkap.'
+            : `OCR selesai; halaman ${failedPages.join(', ')} belum terbaca. Buka halaman tersebut dan klik Coba lagi.`
           : 'OCR selesai. Teks gambar yang ditemukan telah ditambahkan ke unduhan Markdown.';
       regionMessage.textContent = message;
       item.state.textContent = cancelScan || failedPages.length
         ? `Selesai sebagian · ${message}` : `Selesai · ${transcriptEngine} ${totalPages} halaman`;
       single.disabled = copy.disabled = failedPages.length > 0;
+      if (failedPages.length) {
+        transcriptHint.textContent = 'Teks lapisan PDF · OCR belum lengkap';
+        note.textContent = 'Teks di panel ini berasal dari lapisan PDF yang dapat dipilih. Tulisan di dalam gambar dan lampiran belum diekstraksi. Unduhan dinonaktifkan sampai OCR seluruh berkas berhasil.';
+      }
       item.progress.value = 100;
       return {failedPages, cancelled: cancelScan, error: lastPreviewError};
     };
