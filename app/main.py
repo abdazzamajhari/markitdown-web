@@ -223,16 +223,16 @@ def verify_vision() -> None:
     if now < vision_probe_retry_at:
         raise HTTPException(503, "SumoPod belum dapat membaca gambar; coba lagi nanti")
     from PIL import Image, ImageDraw, ImageFont
-    code = "".join(secrets.choice("2345679") for _ in range(4))
+    code = secrets.choice(("KUCING", "JENDELA", "MERAH", "BIRU"))
     with Image.new("RGB", (600, 300), "white") as sample:
         draw = ImageDraw.Draw(sample)
-        draw.text((130, 90), code, fill="black", font=ImageFont.load_default(size=96))
+        draw.text((55, 95), code, fill="black", font=ImageFont.load_default(size=72))
         buffer = BytesIO()
         sample.save(buffer, format="JPEG", quality=95)
     try:
         answer = request_vision(buffer.getvalue(), "image/jpeg",
-                                "Baca empat angka besar pada gambar. Balas hanya angkanya.",
-                                max_tokens=2048, thinking=True)
+                                "Baca kata besar pada gambar. Balas hanya kata itu.",
+                                max_tokens=256, thinking=False)
     except HTTPException as exc:
         if exc.status_code == 502 and "terpotong" in str(exc.detail):
             raise HTTPException(503, "Pemeriksaan gambar SumoPod terpotong sebelum kode terbaca") from None
