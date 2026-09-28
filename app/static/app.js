@@ -155,7 +155,7 @@ function showRegions(layer, regions, message) {
     box.style.width = `${Math.max(0, Math.min(100, region.w * 100))}%`;
     box.style.height = `${Math.max(0, Math.min(100, region.h * 100))}%`;
     box.title = region.text;
-    box.setAttribute('aria-label', `${region.source === 'pdf-text' ? 'Teks lapisan PDF' : 'Teks Qwen'}: ${region.text}`);
+    box.setAttribute('aria-label', `${region.source === 'pdf-text' ? 'Teks lapisan PDF' : 'Teks DeepSeek'}: ${region.text}`);
     box.addEventListener('click', () => {
       layer.querySelector('.selected')?.classList.remove('selected');
       box.classList.add('selected');
@@ -164,8 +164,8 @@ function showRegions(layer, regions, message) {
     layer.append(box);
   }
   message.textContent = layer.childElementCount
-    ? `${layer.childElementCount} area teks ditandai dari ${regions.some(region => region.source === 'pdf-text') ? 'lapisan PDF dan Qwen' : 'Qwen'}. Klik kotak untuk membaca per area.`
-    : 'Qwen tidak memberikan koordinat kotak untuk halaman ini. Hasil teks tetap tersedia di sebelahnya.';
+    ? `${layer.childElementCount} area teks ditandai dari ${regions.some(region => region.source === 'pdf-text') ? 'lapisan PDF dan DeepSeek' : 'DeepSeek'}. Klik kotak untuk membaca per area.`
+    : 'DeepSeek tidak memberikan koordinat kotak untuk halaman ini. Hasil teks tetap tersedia di sebelahnya.';
 }
 function renderDetail(item, markdown, engine, record) {
   const actions = document.createElement('div');
@@ -197,7 +197,7 @@ function renderDetail(item, markdown, engine, record) {
   let transcriptHint;
   if (imageFormats.has(item.extension)) {
     details.open = true;
-    const source = makePane('Gambar sumber', 'Kotak: Qwen3.8-Max');
+    const source = makePane('Gambar sumber', 'Kotak: DeepSeek V4 Flash Vision');
     const zoom = document.createElement('button');
     zoom.type = 'button';
     zoom.className = 'zoom-button';
@@ -209,7 +209,7 @@ function renderDetail(item, markdown, engine, record) {
     source.querySelector('.detail-pane-head').append(zoom);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
-    legend.textContent = '▣ Kotak merah menandai area yang dipetakan Qwen. Klik untuk melihat teks.';
+    legend.textContent = '▣ Kotak merah menandai area yang dipetakan DeepSeek. Klik untuk melihat teks.';
     source.append(legend);
     const scroll = document.createElement('div');
     scroll.className = 'image-scroll';
@@ -235,7 +235,7 @@ function renderDetail(item, markdown, engine, record) {
         image.src = URL.createObjectURL(item.file);
         objectUrls.add(image.src);
       }
-      regionMessage.textContent = 'Memetakan lokasi teks dengan Qwen…';
+      regionMessage.textContent = 'Memetakan lokasi teks dengan DeepSeek…';
       try {
         const response = await fetch('/api/regions', {
           method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
@@ -253,7 +253,7 @@ function renderDetail(item, markdown, engine, record) {
     details.open = true;
     summary.textContent = 'Halaman PDF dan hasil OCR · klik untuk sembunyikan';
     single.disabled = copy.disabled = true;
-    const source = makePane('Halaman PDF dan kotak teks', 'Lapisan PDF + Qwen');
+    const source = makePane('Halaman PDF dan kotak teks', 'Lapisan PDF + DeepSeek');
     const zoom = document.createElement('button');
     zoom.type = 'button';
     zoom.className = 'zoom-button';
@@ -278,7 +278,7 @@ function renderDetail(item, markdown, engine, record) {
     controls.append(previous, pageLabel, next, retry, scanAll);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
-    legend.textContent = '▣ Kotak merah menandai teks lapisan PDF dan area yang dipetakan Qwen. Klik untuk membaca per area.';
+    legend.textContent = '▣ Kotak merah menandai teks lapisan PDF dan area yang dipetakan DeepSeek. Klik untuk membaca per area.';
     const scroll = document.createElement('div');
     scroll.className = 'image-scroll pdf-preview-scroll is-loading';
     scroll.setAttribute('aria-busy', 'true');
@@ -306,7 +306,7 @@ function renderDetail(item, markdown, engine, record) {
     let scanning = false, cancelScan = false;
     const pageCache = new Map();
     const extractedPages = new Map();
-    let transcriptEngine = 'Qwen3.8-Max';
+    let transcriptEngine = 'DeepSeek V4 Flash Vision';
     const updateTranscript = (page, pageText, pageSource) => {
       const sections = [...extractedPages].sort(([a], [b]) => a - b)
         .map(([number, text]) => `## Halaman ${number} (${transcriptEngine})\n\n${text}`);
@@ -384,7 +384,7 @@ function renderDetail(item, markdown, engine, record) {
         pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
         showRegions(layer, payload.regions, regionMessage);
         const pageText = payload.page_text.trim();
-        if (payload.page_source === 'qwen' && pageText) {
+        if (payload.page_source === 'deepseek' && pageText) {
           extractedPages.set(page, pageText);
         }
         updateTranscript(page, pageText, payload.page_source);
@@ -394,9 +394,9 @@ function renderDetail(item, markdown, engine, record) {
         previewStatus.classList.toggle('is-error', !previewUrl);
         if (!previewUrl) previewStatus.textContent = 'Halaman ini belum dapat ditampilkan.';
         retry.hidden = !payload.warning;
-        if (!payload.warning || payload.page_source === 'qwen') pageCache.set(page, payload);
+        if (!payload.warning || payload.page_source === 'deepseek') pageCache.set(page, payload);
         loaded = true;
-        return !payload.warning || payload.page_source === 'qwen';
+        return !payload.warning || payload.page_source === 'deepseek';
       } catch (error) {
         if (pendingUrl) { URL.revokeObjectURL(pendingUrl); objectUrls.delete(pendingUrl); }
         if (previewUrl) { URL.revokeObjectURL(previewUrl); objectUrls.delete(previewUrl); previewUrl = null; }
@@ -462,7 +462,7 @@ function renderDetail(item, markdown, engine, record) {
     });
     loadRegions = async () => { if (!loaded) await showPage(1); };
   }
-  const engineLabel = engine === 'qwen3.8-max' ? 'Qwen3.8-Max' : item.extension === 'pdf' ? 'MarkItDown · Qwen3.8-Max' : 'MarkItDown';
+  const engineLabel = engine === 'deepseek-v4-flash-vision-exp' ? 'DeepSeek V4 Flash Vision' : item.extension === 'pdf' ? 'MarkItDown · DeepSeek V4 Flash Vision' : 'MarkItDown';
   const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
   transcriptHint = transcript.querySelector('.detail-pane-head small');
   const pre = document.createElement('pre');
@@ -473,9 +473,9 @@ function renderDetail(item, markdown, engine, record) {
   const note = document.createElement('p');
   note.className = 'detail-note';
   note.textContent = imageFormats.has(item.extension)
-    ? 'Transkripsi dan lokasi kotak berasal dari Qwen3.8-Max. Kotak dapat tidak lengkap bila model tidak memberikan koordinat.'
+    ? 'Transkripsi dan lokasi kotak berasal dari DeepSeek V4 Flash Vision. Kotak dapat tidak lengkap bila model tidak memberikan koordinat.'
     : item.extension === 'pdf'
-      ? 'Halaman PDF ditranskripsikan otomatis oleh Qwen3.8-Max. Kotak berasal dari lapisan teks PDF dan koordinat Qwen. Hasilnya tampil di awal panel kanan dan masuk ke unduhan Markdown.'
+      ? 'Halaman PDF ditranskripsikan otomatis oleh DeepSeek V4 Flash Vision. Kotak berasal dari lapisan teks PDF dan koordinat DeepSeek. Hasilnya tampil di awal panel kanan dan masuk ke unduhan Markdown.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
   details.append(summary, grid, note);
   if (loadRegions && item.extension !== 'pdf') {
@@ -504,7 +504,7 @@ async function processQueue() {
         }
       }
       const {markdown, engine} = result;
-      const label = engine === 'qwen3.8-max' ? 'Qwen3.8-Max' : 'MarkItDown';
+      const label = engine === 'deepseek-v4-flash-vision-exp' ? 'DeepSeek V4 Flash Vision' : 'MarkItDown';
       item.state.textContent = item.extension === 'pdf' ? 'Menyiapkan OCR halaman PDF…' :
         markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       const record = {name: item.file.name, markdown};
@@ -564,6 +564,6 @@ fetch('/api/capabilities', {cache: 'no-store'})
   .then(({image_ocr, image_ocr_model}) => {
     ocrMode.textContent = image_ocr === 'sumopod'
       ? `OCR PDF dan gambar: ${image_ocr_model} melalui SumoPod. PDF maksimal 30 halaman.`
-      : 'OCR tidak tersedia: atur SUMOPOD_API_KEY untuk Qwen3.8-Max.';
+      : 'OCR tidak tersedia: atur SUMOPOD_API_KEY untuk DeepSeek V4 Flash Vision.';
   })
   .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });

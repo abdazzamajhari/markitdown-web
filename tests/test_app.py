@@ -1,4 +1,4 @@
-"""Behavioral checks for the single Qwen OCR path and PDF limit."""
+"""Behavioral checks for the single DeepSeek OCR path and PDF limit."""
 import io
 import json
 import zipfile
@@ -51,9 +51,9 @@ def fake_provider(monkeypatch, markdown="TEKS GAMBAR", regions=None):
 
 def test_home_and_configuration(client, monkeypatch):
     assert client.get("/health").json() == {"status": "ok"}
-    assert client.get("/api/capabilities").json() == {"image_ocr": "unavailable", "image_ocr_model": "qwen3.8-max"}
+    assert client.get("/api/capabilities").json() == {"image_ocr": "unavailable", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
-    assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "qwen3.8-max"}
+    assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
     assert "MarkItDown Web" in client.get("/").text
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
 
@@ -85,7 +85,7 @@ def test_validates_uploads(client):
     assert upload(client, "wrong.docx", archive.getvalue()).status_code == 415
 
 
-def test_qwen_is_only_image_ocr_and_region_source(client, monkeypatch):
+def test_deepseek_is_only_image_ocr_and_region_source(client, monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     seen = fake_provider(monkeypatch, regions=[
         {"x": .1, "y": .2, "w": .5, "h": .1, "text": "TEKS GAMBAR"},
@@ -93,18 +93,18 @@ def test_qwen_is_only_image_ocr_and_region_source(client, monkeypatch):
     ])
     response = upload(client, "gambar.png", image_bytes())
     assert response.status_code == 200 and response.text == "TEKS GAMBAR"
-    assert response.headers["x-ocr-engine"] == "qwen3.8-max"
+    assert response.headers["x-ocr-engine"] == "deepseek-v4-flash-vision-exp"
     regions = upload(client, "gambar.png", image_bytes(), "/api/regions")
     assert regions.status_code == 200
     assert regions.json()["regions"] == [{"x": .1, "y": .2, "w": .5, "h": .1,
-                                          "text": "TEKS GAMBAR", "source": "qwen"}]
+                                          "text": "TEKS GAMBAR", "source": "deepseek"}]
     assert len(seen) == 2
-    assert all(item[1]["json"]["model"] == "qwen3.8-max" for item in seen)
+    assert all(item[1]["json"]["model"] == "deepseek-v4-flash-vision-exp" for item in seen)
     assert all(item[0] == "https://ai.sumopod.com/v1/chat/completions" for item in seen)
     assert seen[0][1]["json"]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
-def test_qwen_plain_text_and_provider_failure(client, monkeypatch):
+def test_deepseek_plain_text_and_provider_failure(client, monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     monkeypatch.setattr("app.main.httpx.post", lambda *a, **kw: httpx.Response(
         200, json={"choices": [{"message": {"content": "TEKS SAJA"}}]}))
@@ -128,8 +128,8 @@ def test_pdf_ocr_each_page_and_boxes(client, monkeypatch):
         assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["page"] == page and payload["total_pages"] == 2
-        assert payload["page_text"] == "TEKS GAMBAR" and payload["page_source"] == "qwen"
-        assert payload["regions"][0]["source"] == "qwen"
+        assert payload["page_text"] == "TEKS GAMBAR" and payload["page_source"] == "deepseek"
+        assert payload["regions"][0]["source"] == "deepseek"
         assert payload["image"].startswith("data:image/jpeg;base64,")
     assert len(sent) == 2
     assert upload(client, "scan.pdf", pdf, "/api/pdf-preview?page=3").status_code == 400

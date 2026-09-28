@@ -34,7 +34,7 @@ MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 MAX_REQUESTS_PER_MINUTE = 12
 SUMOPOD_URL = "https://ai.sumopod.com/v1/chat/completions"
-SUMOPOD_MODEL = "qwen3.8-max"
+SUMOPOD_MODEL = "deepseek-v4-flash-vision-exp"
 OCR_PROMPT = (
     "Read every visible line in this document image, including screenshots, headings, stamps and tables. "
     "Preserve the language, spelling, numbers and reading order; represent tables in Markdown. "
@@ -144,7 +144,7 @@ def convert_pdf(data: bytes) -> tuple[str, str]:
     return markdown, engine
 
 
-def analyze_qwen(image: bytes, mime_type: str, *, allow_empty: bool = False) -> dict:
+def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False) -> dict:
     key = os.environ.get("SUMOPOD_API_KEY", "").strip()
     if not key:
         raise HTTPException(503, "Kunci SumoPod belum dikonfigurasi")
@@ -189,7 +189,7 @@ def analyze_qwen(image: bytes, mime_type: str, *, allow_empty: bool = False) -> 
         raise HTTPException(502, "Jawaban SumoPod tidak valid") from None
     content = content.strip()
     if choice.get("finish_reason") == "length":
-        raise HTTPException(502, "Transkripsi Qwen terpotong; coba lagi pada halaman ini")
+        raise HTTPException(502, "Transkripsi DeepSeek terpotong; coba lagi pada halaman ini")
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content).strip()
     try:
@@ -197,10 +197,10 @@ def analyze_qwen(image: bytes, mime_type: str, *, allow_empty: bool = False) -> 
     except (ValueError, TypeError):
         parsed = {"markdown": content, "regions": []}
     if not isinstance(parsed, dict) or not isinstance(parsed.get("markdown"), str):
-        raise HTTPException(502, "Jawaban OCR Qwen tidak valid")
+        raise HTTPException(502, "Jawaban OCR DeepSeek tidak valid")
     markdown = parsed["markdown"].strip()
     if not markdown and not allow_empty:
-        raise HTTPException(422, "Qwen tidak menemukan teks pada gambar")
+        raise HTTPException(422, "DeepSeek tidak menemukan teks pada gambar")
     output = markdown.encode("utf-8")
     if len(output) > MAX_OUTPUT_BYTES:
         raise HTTPException(413, "Hasil konversi terlalu besar")
@@ -219,14 +219,14 @@ def analyze_qwen(image: bytes, mime_type: str, *, allow_empty: bool = False) -> 
             all(math.isfinite(v) for v in (x, y, w, h)) and
             0 <= x < 1 and 0 <= y < 1 and 0 < w <= 1 - x and 0 < h <= 1 - y):
             regions.append({"x": x, "y": y, "w": w, "h": h,
-                            "text": line.strip(), "source": "qwen"})
+                            "text": line.strip(), "source": "deepseek"})
     return {"markdown": markdown, "regions": regions}
 
 
 def convert_sumopod(data: bytes, extension: str) -> str:
     # Decode untrusted images in the constrained worker; the provider key stays in this process.
     png = run_worker(data, extension, "prepare-vision", timeout=20)
-    return analyze_qwen(png, "image/png")["markdown"]
+    return analyze_deepseek(png, "image/png")["markdown"]
 
 
 @app.get("/health")
@@ -269,7 +269,7 @@ async def image_regions(request: Request):
         data.extend(chunk)
     validate_content(data, extension)
     if not os.environ.get("SUMOPOD_API_KEY", "").strip():
-        raise HTTPException(503, "Kunci SumoPod untuk Qwen belum dikonfigurasi")
+        raise HTTPException(503, "Kunci SumoPod untuk DeepSeek belum dikonfigurasi")
     async with quota_lock:
         now = time.monotonic()
         while region_requests and region_requests[0] <= now - 60:
@@ -282,14 +282,14 @@ async def image_regions(request: Request):
         region_requests.append(now)
     async with slots:
         png = await run_in_threadpool(run_worker, bytes(data), extension, "prepare-vision", timeout=20)
-        result = await run_in_threadpool(analyze_qwen, png, "image/png", allow_empty=True)
+        result = await run_in_threadpool(analyze_deepseek, png, "image/png", allow_empty=True)
     return JSONResponse({"engine": SUMOPOD_MODEL, "regions": result["regions"]},
                         headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/pdf-preview")
 async def pdf_preview(request: Request, page: int = 1):
-    """Render a PDF page and transcribe its image with the configured Qwen model."""
+    """Render a PDF page and transcribe its image with the configured vision model."""
     _, extension = validate_filename(request.headers.get("x-filename"))
     if extension != ".pdf":
         raise HTTPException(415, "Pratinjau halaman hanya tersedia untuk PDF")
@@ -305,7 +305,7 @@ async def pdf_preview(request: Request, page: int = 1):
         data.extend(chunk)
     validate_content(data, extension)
     if not os.environ.get("SUMOPOD_API_KEY", "").strip():
-        raise HTTPException(503, "Kunci SumoPod untuk Qwen belum dikonfigurasi")
+        raise HTTPException(503, "Kunci SumoPod untuk DeepSeek belum dikonfigurasi")
     async with quota_lock:
         now = time.monotonic()
         while region_requests and region_requests[0] <= now - 60:
@@ -329,11 +329,11 @@ async def pdf_preview(request: Request, page: int = 1):
                 jpeg = base64.b64decode(payload["image"].split(",", 1)[1], validate=True)
             except (ValueError, IndexError):
                 raise HTTPException(502, "Gambar halaman PDF tidak valid") from None
-            analysis = await run_in_threadpool(analyze_qwen, jpeg, "image/jpeg", allow_empty=True)
+            analysis = await run_in_threadpool(analyze_deepseek, jpeg, "image/jpeg", allow_empty=True)
             from app.worker import merge_regions
             payload["page_text"] = analysis["markdown"]
             payload["regions"] = merge_regions(payload["regions"], analysis["regions"])
-            payload["page_source"] = "qwen"
+            payload["page_source"] = "deepseek"
             payload["engine"] = SUMOPOD_MODEL
             if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT_BYTES:
                 raise HTTPException(413, "Pratinjau PDF terlalu besar")
@@ -353,7 +353,7 @@ async def convert_file(request: Request):
         data.extend(chunk)
     validate_content(data, extension)
     if (extension in IMAGE_FORMATS or extension == ".pdf") and not os.environ.get("SUMOPOD_API_KEY", "").strip():
-        raise HTTPException(503, "Kunci SumoPod untuk Qwen belum dikonfigurasi")
+        raise HTTPException(503, "Kunci SumoPod untuk DeepSeek belum dikonfigurasi")
     # Bound simultaneous traffic; the browser waits and retries a temporary 429.
     async with quota_lock:
         now = time.monotonic()
