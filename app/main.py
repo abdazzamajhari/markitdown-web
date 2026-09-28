@@ -167,6 +167,7 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
                 "url": f"data:{mime_type};base64," + base64.b64encode(image).decode("ascii"),
             }},
         ]}],
+        "thinking": {"type": "disabled"},
         "max_tokens": max_tokens,
     }
     try:
