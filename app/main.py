@@ -225,7 +225,7 @@ def verify_vision() -> None:
                             "Jika gambar tidak terbaca, balas string kosong.", max_tokens=128)
     if code not in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
         vision_probe_retry_at = now + 60
-        raise HTTPException(503, "SumoPod menerima gambar tetapi model belum berhasil membacanya. "
+        raise HTTPException(503, "SumoPod menerima gambar tetapi model gagal membacanya. "
                             "Periksa dukungan vision model pada SumoPod.")
     vision_probe_ok = True
 
