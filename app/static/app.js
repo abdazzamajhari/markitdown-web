@@ -299,16 +299,17 @@ function renderDetail(item, markdown, engine, record) {
     let scanning = false, cancelScan = false;
     const pageCache = new Map();
     const extractedPages = new Map();
+    let transcriptEngine = 'OCR lokal';
     const updateTranscript = (page, pageText, pageSource) => {
       const sections = [...extractedPages].sort(([a], [b]) => a - b)
-        .map(([number, text]) => `## Halaman ${number} (OCR gambar)\n\n${text}`);
+        .map(([number, text]) => `## Halaman ${number} (${transcriptEngine})\n\n${text}`);
       record.markdown = sections.length
-        ? `${markdown}\n\n---\n\n# Teks gambar yang diekstraksi\n\n${sections.join('\n\n')}`
+        ? `# Teks halaman yang diekstraksi\n\n${sections.join('\n\n')}${markdown ? `\n\n---\n\n# Markdown dokumen\n\n${markdown}` : ''}`
         : markdown;
       if (sections.length) {
-        // Keep the scanned appendices visible, even when the original PDF text is long.
-        pre.textContent = `# Teks gambar yang diekstraksi\n\n${sections.join('\n\n')}\n\n---\n\n# Markdown dokumen\n\n${markdown}`;
-        transcriptHint.textContent = `MarkItDown + OCR lokal · ${sections.length} halaman gambar`;
+        // Keep the page transcription visible, even when the original PDF text is long.
+        pre.textContent = `# Teks halaman yang diekstraksi\n\n${sections.join('\n\n')}${markdown ? `\n\n---\n\n# Markdown dokumen\n\n${markdown}` : ''}`;
+        transcriptHint.textContent = `${transcriptEngine} · ${sections.length} halaman`;
       } else {
         const source = pageSource === 'pdf-text' ? 'lapisan teks PDF' : 'OCR gambar';
         pre.textContent = pageText
@@ -376,7 +377,9 @@ function renderDetail(item, markdown, engine, record) {
         pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
         showRegions(layer, payload.regions, regionMessage);
         const pageText = payload.page_text.trim();
-        if (payload.page_source === 'tesseract' && pageText && !payload.warning) {
+        if (payload.page_source === 'sumopod') transcriptEngine = 'GPT vision · gpt-4o-mini';
+        if ((payload.page_source === 'sumopod' || payload.page_source === 'tesseract') &&
+            pageText && (payload.page_source === 'sumopod' || !payload.warning)) {
           extractedPages.set(page, pageText);
         }
         updateTranscript(page, pageText, payload.page_source);
@@ -386,9 +389,9 @@ function renderDetail(item, markdown, engine, record) {
         previewStatus.classList.toggle('is-error', !previewUrl);
         if (!previewUrl) previewStatus.textContent = 'Halaman ini belum dapat ditampilkan.';
         retry.hidden = !payload.warning;
-        if (!payload.warning) pageCache.set(page, payload);
+        if (!payload.warning || payload.page_source === 'sumopod') pageCache.set(page, payload);
         loaded = true;
-        return !payload.warning;
+        return !payload.warning || payload.page_source === 'sumopod';
       } catch (error) {
         if (pendingUrl) { URL.revokeObjectURL(pendingUrl); objectUrls.delete(pendingUrl); }
         if (previewUrl) { URL.revokeObjectURL(previewUrl); objectUrls.delete(previewUrl); previewUrl = null; }
@@ -441,7 +444,7 @@ function renderDetail(item, markdown, engine, record) {
           : 'OCR selesai. Teks gambar yang ditemukan telah ditambahkan ke unduhan Markdown.';
       regionMessage.textContent = message;
       item.state.textContent = cancelScan || failedPages.length
-        ? `Selesai sebagian · ${message}` : `Selesai · OCR ${totalPages} halaman`;
+        ? `Selesai sebagian · ${message}` : `Selesai · ${transcriptEngine} ${totalPages} halaman`;
       single.disabled = copy.disabled = false;
       item.progress.value = 100;
       return {failedPages, cancelled: cancelScan};
@@ -454,7 +457,7 @@ function renderDetail(item, markdown, engine, record) {
     });
     loadRegions = async () => { if (!loaded) await showPage(1); };
   }
-  const engineLabel = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
+  const engineLabel = engine === 'sumopod' || engine === 'sumopod-pdf-pending' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
   const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
   transcriptHint = transcript.querySelector('.detail-pane-head small');
   const pre = document.createElement('pre');
@@ -467,7 +470,7 @@ function renderDetail(item, markdown, engine, record) {
   note.textContent = imageFormats.has(item.extension)
     ? 'Kotak dan teks per area berasal dari Tesseract lokal. Hasil Markdown di sebelahnya berasal dari mesin yang tertera dan belum disejajarkan dengan kotak secara otomatis.'
     : item.extension === 'pdf'
-      ? 'OCR halaman PDF berjalan otomatis setelah konversi. Gunakan Sebelumnya/Berikutnya untuk menelusuri halaman; kotak berasal dari lapisan teks PDF dan OCR Tesseract lokal. Teks OCR gambar ditampilkan di awal panel kanan dan ditambahkan ke unduhan Markdown.'
+      ? 'Halaman PDF ditranskripsikan otomatis dengan GPT vision bila SumoPod aktif. Kotak merah dipetakan oleh lapisan PDF dan Tesseract lokal. Hasil GPT tampil di awal panel kanan dan masuk ke unduhan Markdown; gunakan Sebelumnya/Berikutnya untuk menelusuri halaman.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
   details.append(summary, grid, note);
   if (loadRegions && item.extension !== 'pdf') {
@@ -486,7 +489,7 @@ async function processQueue() {
     updateStatus();
     try {
       const {markdown, engine} = await upload(item);
-      const label = engine === 'sumopod' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
+      const label = engine === 'sumopod' || engine === 'sumopod-pdf-pending' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
       item.state.textContent = item.extension === 'pdf' ? 'Menyiapkan OCR halaman PDF…' :
         markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       const record = {name: item.file.name, markdown};
@@ -542,7 +545,7 @@ fetch('/api/capabilities', {cache: 'no-store'})
   .then((response) => response.json())
   .then(({image_ocr, image_ocr_model}) => {
     ocrMode.textContent = image_ocr === 'sumopod'
-      ? `OCR gambar: SumoPod (${image_ocr_model}). Gambar dikirim ke SumoPod; pemetaan kotak memakai OCR lokal.`
+      ? `OCR PDF dan gambar: SumoPod (${image_ocr_model}). Halaman PDF dan gambar dikirim ke SumoPod; kotak dipetakan secara lokal.`
       : 'OCR gambar: lokal (Indonesia dan Inggris). Gambar tidak dikirim ke penyedia AI.';
   })
   .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });

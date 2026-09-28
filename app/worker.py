@@ -270,7 +270,7 @@ def render_pdf_page(data: bytes, page: int) -> bytes:
     return result.stdout
 
 
-def read_pdf_text(data: bytes) -> tuple[int, bytes]:
+def read_pdf_text(data: bytes, use_vision: bool = False) -> tuple[int, bytes]:
     from markitdown import MarkItDown
 
     try:
@@ -280,6 +280,12 @@ def read_pdf_text(data: bytes) -> tuple[int, bytes]:
         # A readable scan may still confuse the PDF text parser. Try local OCR.
         markdown = ""
     engine = "markitdown"
+    if use_vision:
+        # The API will transcribe each rendered page with GPT. Do not run local
+        # Tesseract here, including when the whole PDF is a scan.
+        pdf_pages(data)
+        engine = "markitdown" if markdown else "sumopod-pdf-pending"
+        return 0, json.dumps({"markdown": markdown, "engine": engine}, ensure_ascii=False).encode("utf-8")
     if not markdown:
         pages = pdf_pages(data)
         if pages > MAX_SCANNED_PDF_PAGES:
@@ -366,8 +372,8 @@ def main() -> int:
                 code, output = read_image_text(data, extension)
             if code:
                 return code
-        elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2] == "pdf-convert":
-            code, output = read_pdf_text(data)
+        elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2] in {"pdf-convert", "pdf-convert-ai"}:
+            code, output = read_pdf_text(data, use_vision=sys.argv[2] == "pdf-convert-ai")
             if code:
                 return code
         elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2].startswith("pdf-preview:"):

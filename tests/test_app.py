@@ -408,6 +408,69 @@ def test_sumopod_provider_error_does_not_fall_back(client, monkeypatch):
     assert "secret provider body" not in response.text
 
 
+def test_scanned_pdf_uses_gpt_for_every_page_and_keeps_local_boxes(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "server-only-test-key")
+    sent = []
+
+    def fake_post(url, *, json, headers, timeout, follow_redirects):
+        sent.append(json)
+        return httpx.Response(200, json={"choices": [{"message": {
+            "content": f"Lampiran {len(sent) + 1}. IJAZAH DAN TABEL NILAI"
+        }, "finish_reason": "stop"}]})
+
+    monkeypatch.setattr("app.main.httpx.post", fake_post)
+    pdf = scanned_pdf(2)
+    conversion = upload(client, "lampiran.pdf", pdf)
+    assert conversion.status_code == 200, conversion.text
+    assert conversion.headers["x-ocr-engine"] == "sumopod-pdf-pending"
+    assert conversion.text == "" and not sent  # No Tesseract transcription during conversion.
+
+    for page in (1, 2):
+        preview = client.post(f"/api/pdf-preview?page={page}", content=pdf,
+                              headers={"X-Filename": "lampiran.pdf"})
+        assert preview.status_code == 200, preview.text[:200]
+        payload = preview.json()
+        assert payload["page_source"] == "sumopod"
+        assert payload["engine"] == "sumopod+regions"
+        assert f"Lampiran {page + 1}" in payload["page_text"]
+        assert payload["regions"] and any(box["source"] == "tesseract" for box in payload["regions"])
+        request = sent[page - 1]["messages"][0]["content"]
+        assert "HALAMAN" in request[0]["text"]  # Local boxes are hints to GPT.
+        assert request[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert len(remote_requests) == 2
+
+
+def test_gpt_transcribes_pdf_with_native_text_without_losing_boxes(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "server-only-test-key")
+    monkeypatch.setattr("app.main.httpx.post", lambda *a, **k: httpx.Response(
+        200, json={"choices": [{"message": {"content": "| LEFT CELL | RIGHT CELL |"}}]}))
+    pdf = table_text_pdf()
+    conversion = upload(client, "table.pdf", pdf)
+    assert conversion.status_code == 200 and "LEFT CELL" in conversion.text
+    preview = client.post("/api/pdf-preview?page=1", content=pdf,
+                          headers={"X-Filename": "table.pdf"})
+    assert preview.status_code == 200, preview.text[:200]
+    assert preview.json()["page_source"] == "sumopod"
+    assert "RIGHT CELL" in preview.json()["page_text"]
+    assert {box["text"] for box in preview.json()["regions"] if box["source"] == "pdf-text"} == {
+        "LEFT CELL", "RIGHT CELL"}
+
+
+def test_pdf_gpt_error_does_not_use_local_transcription(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "server-only-test-key")
+    monkeypatch.setattr("app.main.httpx.post", lambda *a, **k: httpx.Response(401, text="private response"))
+    preview = client.post("/api/pdf-preview?page=1", content=scanned_pdf(1),
+                          headers={"X-Filename": "scan.pdf"})
+    assert preview.status_code == 503
+    assert "private response" not in preview.text
+
+
+def test_ai_pdf_conversion_defers_even_long_scans_without_local_ocr(monkeypatch):
+    monkeypatch.setattr(worker, "read_image_text", lambda *a, **k: pytest.fail("Local OCR called"))
+    code, output = worker.read_pdf_text(scanned_pdf(9), use_vision=True)
+    assert code == 0 and json.loads(output)["engine"] == "sumopod-pdf-pending"
+
+
 def test_vision_prepares_photo_without_truncating_it():
     image = Image.frombytes("RGB", (1288, 1288), os.urandom(1288 * 1288 * 3))
     buffer = io.BytesIO()
