@@ -392,7 +392,7 @@ function renderDetail(item, markdown, engine, record) {
         updateTranscript(page, pageText, payload.page_source);
         if (payload.ocr_error) {
           lastPreviewError = payload.ocr_error;
-          fatalOcrError = payload.ocr_status === 402 || payload.ocr_status === 503;
+          fatalOcrError = [402, 503, 504].includes(payload.ocr_status);
           regionMessage.textContent = `${payload.ocr_error} Gambar PDF tetap ditampilkan; teks di sebelah kanan berasal dari lapisan PDF saja.`;
         } else if (payload.preview_only) {
           regionMessage.textContent = 'Pratinjau PDF tanpa OCR. Setelah akses API pulih, unggah ulang berkas untuk mengekstraksi semua halaman.';
@@ -464,7 +464,7 @@ function renderDetail(item, markdown, engine, record) {
         ? 'OCR dihentikan. Teks halaman yang sudah diproses tersedia untuk diunduh.'
         : failedPages.length
           ? fatalOcrError
-            ? 'OCR dihentikan karena penyedia belum berhasil membaca gambar. Pratinjau PDF tetap tersedia. Periksa pesan kesalahan, lalu unggah ulang setelah layanan OCR siap.'
+            ? 'OCR dihentikan karena SumoPod belum mengembalikan hasil yang dapat dipakai. Pratinjau PDF tetap tersedia. Periksa pesan kesalahan, lalu unggah ulang setelah layanan OCR siap.'
             : `OCR selesai; halaman ${failedPages.join(', ')} belum terbaca. Buka halaman tersebut dan klik Coba lagi.`
           : 'OCR selesai. Teks gambar yang ditemukan telah ditambahkan ke unduhan Markdown.';
       regionMessage.textContent = message;
