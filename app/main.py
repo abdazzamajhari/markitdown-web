@@ -229,9 +229,14 @@ def verify_vision() -> None:
         draw.text((130, 90), code, fill="black", font=ImageFont.load_default(size=96))
         buffer = BytesIO()
         sample.save(buffer, format="JPEG", quality=95)
-    answer = request_vision(buffer.getvalue(), "image/jpeg",
-                            "Baca empat angka besar pada gambar. Balas hanya angkanya.",
-                            max_tokens=512, thinking=True)
+    try:
+        answer = request_vision(buffer.getvalue(), "image/jpeg",
+                                "Baca empat angka besar pada gambar. Balas hanya angkanya.",
+                                max_tokens=2048, thinking=True)
+    except HTTPException as exc:
+        if exc.status_code == 502 and "terpotong" in str(exc.detail):
+            raise HTTPException(503, "Pemeriksaan gambar SumoPod terpotong sebelum kode terbaca") from None
+        raise
     if code not in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
         logging.getLogger(__name__).warning("SumoPod vision probe mismatch: expected=%s response=%r",
                                             code, answer[:160])
