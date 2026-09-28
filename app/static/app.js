@@ -453,7 +453,7 @@ function renderDetail(item, markdown, engine, record) {
       regionMessage.textContent = message;
       item.state.textContent = cancelScan || failedPages.length
         ? `Selesai sebagian · ${message}` : `Selesai · ${transcriptEngine} ${totalPages} halaman`;
-      single.disabled = copy.disabled = false;
+      single.disabled = copy.disabled = failedPages.length > 0;
       item.progress.value = 100;
       return {failedPages, cancelled: cancelScan, error: lastPreviewError};
     };
