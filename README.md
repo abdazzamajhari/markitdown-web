@@ -1,6 +1,6 @@
 # MarkItDown Web
 
-Aplikasi web mandiri untuk mengubah dokumen menjadi Markdown. Teks yang dapat dipilih diekstraksi dengan [microsoft/markitdown](https://github.com/microsoft/markitdown); OCR gambar dan seluruh halaman PDF memakai **`deepseek-v4-flash-vision-exp`** melalui API DeepSeek resmi atau SumoPod. Proyek ini bukan layanan resmi Microsoft, DeepSeek, atau SumoPod.
+Aplikasi web mandiri untuk mengubah dokumen menjadi Markdown. Teks yang dapat dipilih diekstraksi dengan [microsoft/markitdown](https://github.com/microsoft/markitdown); OCR gambar dan seluruh halaman PDF memakai **`deepseek-v4-flash-vision-exp`** melalui API SumoPod. Proyek ini bukan layanan resmi Microsoft, DeepSeek, atau SumoPod.
 
 ## Fitur
 
@@ -8,7 +8,7 @@ Aplikasi web mandiri untuk mengubah dokumen menjadi Markdown. Teks yang dapat di
 - **Setiap PDF maksimal 30 halaman.** PDF dengan 31 halaman atau lebih langsung ditandai **Dilewati** dan antrean melanjutkan berkas berikutnya. PDF hasil pindai dan PDF campuran dengan gambar tertanam sama-sama diproses per halaman oleh DeepSeek. Progres `OCR halaman N/M` tampil sampai selesai.
 - Panel detail PDF terbuka otomatis. Teks DeepSeek per halaman muncul di awal panel kanan dan ikut masuk ke `.md` per berkas, ZIP seluruh hasil, serta `.md` gabungan. Teks lapisan PDF asli tetap dipertahankan setelah transkripsi halaman sebagai referensi.
 - Kotak merah pada teks yang dapat dipilih memakai koordinat lapisan PDF. Untuk gambar, aplikasi meminta DeepSeek mengembalikan koordinat teks. Koordinat model dapat tidak lengkap; bila tidak tersedia, halaman menyebutkannya tanpa membuat kotak palsu. Kotak dapat diklik untuk membaca teks per area.
-- Tombol Sebelumnya/Berikutnya menelusuri halaman PDF, OCR seluruh halaman mengulang pemrosesan, dan Coba lagi mengulang halaman yang gagal. Permintaan yang terkena pembatasan sementara diulang otomatis. Hasil sebagian tetap dapat diunduh.
+- Tombol Sebelumnya/Berikutnya menelusuri halaman PDF, OCR seluruh halaman mengulang pemrosesan, dan Coba lagi mengulang halaman yang gagal. Permintaan yang terkena pembatasan sementara diulang otomatis. Unduhan Markdown lengkap dinonaktifkan jika OCR halaman gagal.
 - Format: PNG, JPG/JPEG, WebP, PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON. Gambar tertanam dalam DOCX/PPTX belum di-OCR.
 
 ## Menjalankan lokal
@@ -19,13 +19,13 @@ Python 3.12 dan Poppler diperlukan. Di Debian/Ubuntu, instal `poppler-utils`.
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-export DEEPSEEK_API_KEY='kunci-resmi-anda'
+export SUMOPOD_API_KEY='kunci-sumopod-anda'
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Atau jalankan Dockerfile. Untuk OCR gambar dan PDF, atur `DEEPSEEK_API_KEY` (diutamakan, API resmi `https://api.deepseek.com/chat/completions`) atau `SUMOPOD_API_KEY` (`https://ai.sumopod.com/v1/chat/completions`) sebagai environment variable di Render. Jangan taruh kunci di repositori atau antarmuka web. Kedua jalur hanya mengirim model **`deepseek-v4-flash-vision-exp`**. Mode thinking dimatikan. Sebelum OCR pertama, aplikasi meminta model membaca kode uji acak dari gambar; bila penyedia menerima gambar tetapi tidak membacanya, OCR mengembalikan kesalahan yang jelas. Respons OCR kosong pada halaman PDF juga tidak ditandai berhasil. Hasil dari penyedia tetap perlu diperiksa terhadap halaman asli.
+Atau jalankan Dockerfile. Untuk OCR gambar dan PDF, atur **`SUMOPOD_API_KEY`** sebagai environment variable di Render. Aplikasi hanya memanggil `https://ai.sumopod.com/v1/chat/completions` dengan model **`deepseek-v4-flash-vision-exp`**; `DEEPSEEK_API_KEY` diabaikan. Jangan taruh kunci di repositori atau antarmuka web. Mode thinking dimatikan. Sebelum OCR pertama, aplikasi meminta model membaca kode uji acak dari gambar; bila SumoPod menerima gambar tetapi tidak membacanya, OCR mengembalikan kesalahan yang jelas. Respons OCR kosong pada halaman PDF juga tidak ditandai berhasil. Hasil dari penyedia tetap perlu diperiksa terhadap halaman asli.
 
-Menurut [catatan perubahan resmi DeepSeek](https://api-docs.deepseek.com/updates/), ID `deepseek-v4-flash-vision-exp` telah menjadi alias kompatibilitas yang diarahkan ke V4.1 Flash pada API resmi DeepSeek. Aplikasi tetap mengirim ID yang diminta; perutean aktual di SumoPod bergantung pada penyedia tersebut.
+Menurut [catatan perubahan resmi DeepSeek](https://api-docs.deepseek.com/updates/), ID `deepseek-v4-flash-vision-exp` telah menjadi alias kompatibilitas yang diarahkan ke V4.1 Flash pada API resmi DeepSeek. Aplikasi tetap mengirim ID yang diminta ke SumoPod; perutean aktual di sana bergantung pada SumoPod.
 
 Halaman PDF dan gambar diunggah ke penyedia yang dikonfigurasi saat OCR dijalankan. Periksa kebijakan data dan biaya penyedia sebelum memakai dokumen sensitif. Aplikasi tidak menyimpan berkas secara permanen; daftar hasil di browser hilang setelah halaman dimuat ulang. Banyak PDF berarti banyak panggilan model, satu untuk setiap halaman dan satu tambahan untuk pemetaan kotak gambar biasa.
 
@@ -44,13 +44,13 @@ Untuk PDF, `/api/convert` mengembalikan teks lapisan dokumen yang tersedia. Anta
 
 Jika OCR penyedia gagal, `/api/pdf-preview` tetap mengirim gambar halaman dan kotak dari lapisan teks PDF, disertai `ocr_error` dan `ocr_status`. Antarmuka menandai berkas gagal serta menonaktifkan unduhan Markdown lengkap; halaman lain masih dapat dijelajahi sebagai pratinjau tanpa memanggil model lagi. `preview_only=true` meminta gambar halaman tanpa OCR. Teks lapisan PDF yang muncul di panel bukan transkripsi tulisan dalam gambar.
 
-**HTTP 402:** akun penyedia yang aktif menolak permintaan karena pembayaran/kredit. Periksa saldo atau paket pada akun penyedia tersebut. Pada [API resmi DeepSeek](https://api-docs.deepseek.com/quick_start/error_codes/), HTTP 402 berarti saldo tidak mencukupi; jika memakai SumoPod, lihat status kredit/paket SumoPod. `DEEPSEEK_API_KEY` yang valid dan bersaldo akan diprioritaskan jika diatur di Render. Setelah memperbaiki akses penyedia, unggah ulang berkas untuk OCR seluruh halaman.
+**HTTP 402:** SumoPod menolak permintaan karena pembayaran atau kredit diperlukan. Periksa status akun dan tagihan di SumoPod; aplikasi tidak dapat melihat detail saldo atau keputusan tagihan penyedia. Saldo akun API DeepSeek resmi tidak relevan untuk jalur ini. Setelah akses SumoPod pulih, unggah ulang berkas untuk OCR seluruh halaman.
 
 Layanan menerima maksimal 12 permintaan konversi dan 12 permintaan pratinjau per menit per instans. Ini pembatas laju, **bukan batas jumlah PDF**: antarmuka menunggu `Retry-After` dan melanjutkan antrean. Hanya satu pemrosesan aktif per instans. PDF dengan lebih dari 30 halaman ditolak HTTP 413 dengan keterangan Dilewati.
 
 ## GitHub dan Render
 
-Sumber kode: [abdazzamajhari/markitdown-web](https://github.com/abdazzamajhari/markitdown-web). Hubungkan repositori ini sebagai Render Blueprint memakai `render.yaml`, lalu atur `DEEPSEEK_API_KEY` di Environment untuk API resmi; `SUMOPOD_API_KEY` tetap dapat dipakai jika vision berfungsi. Build Docker memasang Poppler untuk render PDF. Render memakai instance `free` untuk percobaan; memori 512 MB dan batas waktu penyedia bisa memengaruhi dokumen besar. Periksa kebijakan biaya penyedia untuk pemakaian banyak halaman.
+Sumber kode: [abdazzamajhari/markitdown-web](https://github.com/abdazzamajhari/markitdown-web). Hubungkan repositori ini sebagai Render Blueprint memakai `render.yaml`, lalu atur `SUMOPOD_API_KEY` di Environment untuk OCR melalui SumoPod. Build Docker memasang Poppler untuk render PDF. Render memakai instance `free` untuk percobaan; memori 512 MB dan batas waktu penyedia bisa memengaruhi dokumen besar. Periksa kebijakan biaya penyedia untuk pemakaian banyak halaman.
 
 ```bash
 pip install -r requirements-dev.txt
