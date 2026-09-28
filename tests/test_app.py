@@ -174,6 +174,28 @@ def test_sumopod_timeout_preserves_preview_and_identifies_timeout(client, monkey
     assert "80 detik" in payload["ocr_error"]
 
 
+
+def test_pdf_transcription_survives_box_mapping_timeout(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    calls = []
+
+    def provider(url, **kwargs):
+        calls.append(kwargs["json"]["messages"][0]["content"][0]["text"])
+        if len(calls) == 1:
+            return httpx.Response(200, json={"choices": [{"message": {"content": "HALAMAN OCR"}}]})
+        raise httpx.ReadTimeout("coordinate mapping slow")
+
+    monkeypatch.setattr("app.main.httpx.post", provider)
+    response = upload(client, "scan.pdf", pdf_bytes(), "/api/pdf-preview?page=1")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page_text"] == "HALAMAN OCR"
+    assert payload["page_source"] == "deepseek"
+    assert "ocr_error" not in payload
+    assert len(calls) == 2
+
+
+
 def test_empty_provider_result_is_not_reported_as_success(client, monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     fake_provider(monkeypatch, markdown="")
