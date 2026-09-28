@@ -226,8 +226,8 @@ def verify_vision() -> None:
         logging.getLogger(__name__).warning("SumoPod vision probe mismatch: expected=%s response=%r",
                                             code, answer[:160])
         vision_probe_retry_at = now + 60
-        raise HTTPException(503, "SumoPod menerima gambar tetapi model gagal membacanya. "
-                            "Periksa dukungan vision model pada SumoPod.")
+        raise HTTPException(503, "Jawaban SumoPod tidak cocok dengan gambar uji. "
+                            "Periksa apakah rute model SumoPod meneruskan input gambar.")
     vision_probe_ok = True
 
 
