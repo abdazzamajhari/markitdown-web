@@ -179,6 +179,8 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
             headers={"Authorization": "Bearer " + key},
             timeout=80, follow_redirects=False,
         )
+    except httpx.TimeoutException:
+        raise HTTPException(504, "SumoPod melewati batas waktu respons (80 detik)") from None
     except httpx.HTTPError:
         raise HTTPException(502, f"{provider} tidak dapat dihubungi") from None
     if result.status_code in {401, 403}:
@@ -381,7 +383,7 @@ async def pdf_preview(request: Request, page: int = 1, preview_only: bool = Fals
             try:
                 analysis = await run_in_threadpool(analyze_deepseek, jpeg, "image/jpeg")
             except HTTPException as exc:
-                if exc.status_code not in {402, 502, 503}:
+                if exc.status_code not in {402, 502, 503, 504}:
                     raise
                 payload["ocr_error"] = exc.detail
                 payload["ocr_status"] = exc.status_code
