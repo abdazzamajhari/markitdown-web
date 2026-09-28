@@ -23,7 +23,7 @@ export SUMOPOD_API_KEY='kunci-anda'
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Atau jalankan Dockerfile. `SUMOPOD_API_KEY` wajib untuk OCR gambar dan PDF; simpan sebagai environment variable di Render, jangan taruh di repositori atau antarmuka web. Endpoint OpenAI-compatible yang digunakan adalah `https://ai.sumopod.com/v1/chat/completions` dengan model **`deepseek-v4-flash-vision-exp` saja**. Kegagalan penyedia ditampilkan sebagai kesalahan; aplikasi tidak menggantinya dengan model lain.
+Atau jalankan Dockerfile. `SUMOPOD_API_KEY` wajib untuk OCR gambar dan PDF; simpan sebagai environment variable di Render, jangan taruh di repositori atau antarmuka web. Endpoint OpenAI-compatible yang digunakan adalah `https://ai.sumopod.com/v1/chat/completions` dengan model **`deepseek-v4-flash-vision-exp` saja**. Mode thinking dimatikan agar OCR langsung menghasilkan teks. Respons OCR kosong pada halaman PDF yang diproses ditampilkan sebagai kesalahan, sehingga berkas tidak keliru ditandai berhasil. Aplikasi tidak mengganti kegagalan penyedia dengan model lain.
 
 Menurut [catatan perubahan resmi DeepSeek](https://api-docs.deepseek.com/updates/), ID `deepseek-v4-flash-vision-exp` telah menjadi alias kompatibilitas yang diarahkan ke V4.1 Flash pada API resmi DeepSeek. Aplikasi tetap mengirim ID yang diminta ke SumoPod; perutean aktual dan ketersediaan ID di SumoPod bergantung pada penyedia tersebut.
 

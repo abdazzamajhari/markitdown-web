@@ -160,6 +160,7 @@ def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False)
             }},
         ]}],
         "temperature": 0,
+        "thinking": {"type": "disabled"},
         "max_tokens": 8192,
         "stream": False,
     }
@@ -200,7 +201,7 @@ def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False)
         raise HTTPException(502, "Jawaban OCR DeepSeek tidak valid")
     markdown = parsed["markdown"].strip()
     if not markdown and not allow_empty:
-        raise HTTPException(422, "DeepSeek tidak menemukan teks pada gambar")
+        raise HTTPException(502, "DeepSeek mengembalikan hasil OCR kosong; periksa dukungan vision di SumoPod")
     output = markdown.encode("utf-8")
     if len(output) > MAX_OUTPUT_BYTES:
         raise HTTPException(413, "Hasil konversi terlalu besar")
@@ -329,7 +330,7 @@ async def pdf_preview(request: Request, page: int = 1):
                 jpeg = base64.b64decode(payload["image"].split(",", 1)[1], validate=True)
             except (ValueError, IndexError):
                 raise HTTPException(502, "Gambar halaman PDF tidak valid") from None
-            analysis = await run_in_threadpool(analyze_deepseek, jpeg, "image/jpeg", allow_empty=True)
+            analysis = await run_in_threadpool(analyze_deepseek, jpeg, "image/jpeg")
             from app.worker import merge_regions
             payload["page_text"] = analysis["markdown"]
             payload["regions"] = merge_regions(payload["regions"], analysis["regions"])

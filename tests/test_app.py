@@ -100,6 +100,7 @@ def test_deepseek_is_only_image_ocr_and_region_source(client, monkeypatch):
                                           "text": "TEKS GAMBAR", "source": "deepseek"}]
     assert len(seen) == 2
     assert all(item[1]["json"]["model"] == "deepseek-v4-flash-vision-exp" for item in seen)
+    assert all(item[1]["json"]["thinking"] == {"type": "disabled"} for item in seen)
     assert all(item[0] == "https://ai.sumopod.com/v1/chat/completions" for item in seen)
     assert seen[0][1]["json"]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
 
@@ -112,6 +113,15 @@ def test_deepseek_plain_text_and_provider_failure(client, monkeypatch):
     monkeypatch.setattr("app.main.httpx.post", lambda *a, **kw: httpx.Response(400))
     response = upload(client, "gambar.png", image_bytes())
     assert response.status_code == 502 and "HTTP 400" in response.json()["detail"]
+
+
+def test_empty_provider_result_is_not_reported_as_success(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    fake_provider(monkeypatch, markdown="")
+    response = upload(client, "gambar.png", image_bytes())
+    assert response.status_code == 502 and "OCR kosong" in response.json()["detail"]
+    preview = upload(client, "scan.pdf", pdf_bytes(), "/api/pdf-preview?page=1")
+    assert preview.status_code == 502 and "OCR kosong" in preview.json()["detail"]
 
 
 def test_pdf_ocr_each_page_and_boxes(client, monkeypatch):
