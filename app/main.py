@@ -255,7 +255,7 @@ def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False,
             region_content = request_vision(image, mime_type, REGIONS_PROMPT,
                                             max_tokens=4096, timeout=25).strip()
             if region_content.startswith("```"):
-                region_content = re.sub(r"^```(?:json)?\\s*|\\s*```$", "", region_content).strip()
+                region_content = re.sub(r"^```(?:json)?\s*|\s*```$", "", region_content).strip()
             region_payload = json.loads(region_content)
             if isinstance(region_payload, dict):
                 parsed["regions"] = region_payload.get("regions", [])
