@@ -434,7 +434,7 @@ function renderDetail(item, markdown, engine, record) {
         previous.disabled = scanning || !loaded || currentPage <= 1;
         next.disabled = scanning || !loaded || currentPage >= totalPages;
         retry.disabled = scanning;
-        scanAll.disabled = !loaded;
+        scanAll.disabled = !loaded || fatalOcrError;
       }
     };
     previous.addEventListener('click', () => void showPage(currentPage - 1));
