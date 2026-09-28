@@ -194,7 +194,7 @@ def test_rejects_provider_that_ignores_image(monkeypatch):
     with pytest.raises(app_main.HTTPException) as caught:
         app_main.verify_vision()
     assert caught.value.status_code == 503
-    assert "gagal membacanya" in caught.value.detail
+    assert "tidak cocok dengan gambar uji" in caught.value.detail
 
 
 def test_pdf_ocr_each_page_and_boxes(client, monkeypatch):
