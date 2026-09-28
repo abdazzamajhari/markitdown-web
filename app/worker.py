@@ -2,7 +2,6 @@
 
 import io
 import base64
-import csv
 import json
 import re
 import socket
@@ -12,10 +11,10 @@ import xml.etree.ElementTree as ET
 
 IMAGE_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
 MAX_IMAGE_PIXELS = 8_000_000
-MAX_SCANNED_PDF_PAGES = 8
+MAX_PDF_PAGES = 30
 
 
-def prepare_image(data: bytes, extension: str, for_vision: bool = False) -> tuple[int, bytes]:
+def prepare_image(data: bytes, extension: str) -> tuple[int, bytes]:
     from PIL import Image, ImageOps, UnidentifiedImageError
 
     Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
@@ -30,44 +29,15 @@ def prepare_image(data: bytes, extension: str, for_vision: bool = False) -> tupl
                 with oriented.convert("RGBA") as rgba:
                     with Image.new("RGB", rgba.size, "white") as rgb:
                         rgb.paste(rgba, mask=rgba.getchannel("A"))
-                        if for_vision:
-                            rgb.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-                        target = rgb
-                        if not for_vision and max(rgb.size) < 1000:
-                            scale = 1000 / max(rgb.size)
-                            target = rgb.resize((round(rgb.width * scale), round(rgb.height * scale)), Image.Resampling.LANCZOS)
+                        rgb.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
                         image_bytes = io.BytesIO()
-                        try:
-                            target.save(image_bytes, format="PNG")
-                        finally:
-                            if target is not rgb:
-                                target.close()
+                        rgb.save(image_bytes, format="PNG")
     except Image.DecompressionBombError:
         return 4, b""
     except (UnidentifiedImageError, OSError, ValueError):
         return 5, b""
 
     return 0, image_bytes.getvalue()
-
-
-def read_image_text(data: bytes, extension: str) -> tuple[int, bytes]:
-    code, png = prepare_image(data, extension)
-    if code:
-        return code, b""
-    for psm in ("3", "11"):
-        try:
-            result = subprocess.run(
-                ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", psm],
-                input=png, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, check=False, timeout=10,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return 2, b""
-        if result.returncode != 0:
-            return 2, b""
-        if result.stdout.strip():
-            return (3 if len(result.stdout) > 2 * 1024 * 1024 else 0), result.stdout
-    return 0, b""
 
 
 def merge_regions(existing: list[dict], additions: list[dict], limit: int = 600) -> list[dict]:
@@ -94,118 +64,6 @@ def merge_regions(existing: list[dict], additions: list[dict], limit: int = 600)
         if not duplicate:
             regions.append(region)
     return regions
-
-
-def read_image_regions(data: bytes, extension: str, max_dimension: int | None = None) -> tuple[int, bytes]:
-    """Return local OCR line positions, including extra detections from sparse text."""
-    from PIL import Image
-
-    # Keep the screenshot's full resolution so small UI text remains detectable.
-    code, png = prepare_image(data, extension)
-    if code:
-        return code, b""
-    if max_dimension:
-        with Image.open(io.BytesIO(png)) as image:
-            if max(image.size) > max_dimension:
-                image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-                resized = io.BytesIO()
-                image.save(resized, format="PNG")
-                png = resized.getvalue()
-            width, height = image.size
-    else:
-        with Image.open(io.BytesIO(png)) as image:
-            width, height = image.size
-    def smaller_image(size: int) -> tuple[bytes, int, int]:
-        with Image.open(io.BytesIO(png)) as image:
-            image.thumbnail((size, size), Image.Resampling.LANCZOS)
-            resized = io.BytesIO()
-            image.save(resized, format="PNG")
-            return resized.getvalue(), image.width, image.height
-
-    regions = []
-    primary_text = ""
-    had_error = False
-    first_failed = False
-    # Sparse-text mode finds table cells and small screenshot labels. Run it first
-    # so a slower secondary pass cannot leave the page entirely without OCR.
-    for attempt in range(2):
-        if attempt == 0:
-            psm, timeout, pass_png, pass_width, pass_height = "11", 18, png, width, height
-        else:
-            psm = "11" if first_failed else "3"
-            timeout = 6
-            pass_png, pass_width, pass_height = smaller_image(1000 if first_failed else 1200)
-        try:
-            result = subprocess.run(
-                ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", psm, "tsv"],
-                input=pass_png, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                check=False, timeout=timeout,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            had_error = True
-            if attempt == 0:
-                first_failed = True
-            continue
-        if result.returncode != 0:
-            had_error = True
-            if attempt == 0:
-                first_failed = True
-            continue
-        lines = {}
-        try:
-            for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", "replace")), delimiter="\t"):
-                word = row["text"].strip()
-                if row["level"] != "5" or not word or float(row["conf"]) < 0:
-                    continue
-                x, y, w, h = (int(row[k]) for k in ("left", "top", "width", "height"))
-                if w <= 0 or h <= 0:
-                    continue
-                key = (row["page_num"], row["block_num"], row["par_num"], row["line_num"])
-                if key not in lines:
-                    lines[key] = {"x": x, "y": y, "right": x + w, "bottom": y + h, "words": []}
-                line = lines[key]
-                line["x"] = min(line["x"], x)
-                line["y"] = min(line["y"], y)
-                line["right"] = max(line["right"], x + w)
-                line["bottom"] = max(line["bottom"], y + h)
-                line["words"].append((x, y, w, h, word))
-        except (KeyError, TypeError, ValueError):
-            had_error = True
-            if attempt == 0:
-                first_failed = True
-            continue
-        additions = []
-        for line in lines.values():
-            groups = []
-            for word in sorted(line["words"], key=lambda item: item[0]):
-                if not groups or word[0] - groups[-1][-1][0] - groups[-1][-1][2] > max(20, word[3] * 3):
-                    groups.append([])
-                groups[-1].append(word)
-            for group in groups:
-                x1 = min(word[0] for word in group)
-                y1 = min(word[1] for word in group)
-                x2 = max(word[0] + word[2] for word in group)
-                y2 = max(word[1] + word[3] for word in group)
-                additions.append({
-                    "x": round(x1 / pass_width, 5),
-                    "y": round(y1 / pass_height, 5),
-                    "w": round((x2 - x1) / pass_width, 5),
-                    "h": round((y2 - y1) / pass_height, 5),
-                    "text": " ".join(word[4] for word in group)[:300],
-                    "source": "tesseract",
-                })
-                if len(additions) >= 600:
-                    break
-            if len(additions) >= 600:
-                break
-        candidate_text = "\n".join(region["text"] for region in additions)[:50000]
-        if sum(char.isalnum() for char in candidate_text) > sum(char.isalnum() for char in primary_text):
-            primary_text = candidate_text
-        regions = merge_regions(regions, additions)
-    if had_error and not regions:
-        return 2, b""
-    return 0, json.dumps({"engine": "tesseract", "regions": regions,
-                          "text": primary_text}, ensure_ascii=False).encode("utf-8")
 
 
 def read_pdf_text_regions(data: bytes, page: int) -> list[dict]:
@@ -270,77 +128,32 @@ def render_pdf_page(data: bytes, page: int) -> bytes:
     return result.stdout
 
 
-def read_pdf_text(data: bytes, use_vision: bool = False) -> tuple[int, bytes]:
+def read_pdf_text(data: bytes) -> tuple[int, bytes]:
+    # PDF image pages are transcribed by the single configured vision model.
+    pages = pdf_pages(data)
+    if pages > MAX_PDF_PAGES:
+        return 8, b""
     from markitdown import MarkItDown
-
     try:
         result = MarkItDown(enable_plugins=False).convert_stream(io.BytesIO(data), file_extension=".pdf")
         markdown = (result.markdown or "").strip()
     except Exception:
-        # A readable scan may still confuse the PDF text parser. Try local OCR.
         markdown = ""
-    engine = "markitdown"
-    if use_vision:
-        # The API will transcribe each rendered page with GPT. Do not run local
-        # Tesseract here, including when the whole PDF is a scan.
-        pdf_pages(data)
-        engine = "markitdown" if markdown else "sumopod-pdf-pending"
-        return 0, json.dumps({"markdown": markdown, "engine": engine}, ensure_ascii=False).encode("utf-8")
-    if not markdown:
-        pages = pdf_pages(data)
-        if pages > MAX_SCANNED_PDF_PAGES:
-            return 6, b""
-        extracted = []
-        successful_pages = 0
-        for page in range(1, pages + 1):
-            try:
-                code, output = read_image_text(render_pdf_page(data, page), ".jpg")
-            except (OSError, ValueError, subprocess.TimeoutExpired):
-                code, output = 2, b""
-            if code == 3:
-                return code, b""
-            if code:
-                extracted.append(f"## Halaman {page}\n\n> OCR gagal membaca halaman ini. Coba ekspor halaman sebagai gambar.")
-                continue
-            successful_pages += 1
-            extracted.append(f"## Halaman {page}\n\n{output.decode('utf-8').strip()}")
-        if not successful_pages:
-            return 2, b""
-        markdown = "\n\n".join(extracted).strip()
-        engine = "tesseract-pdf-partial" if successful_pages < pages else "tesseract-pdf"
-    return 0, json.dumps({"markdown": markdown, "engine": engine}, ensure_ascii=False).encode("utf-8")
+    return 0, json.dumps({"markdown": markdown, "engine": "markitdown"}, ensure_ascii=False).encode("utf-8")
 
 
 def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
     pages = pdf_pages(data)
+    if pages > MAX_PDF_PAGES:
+        return 8, b""
     if page < 1 or page > pages:
         return 7, b""
-    payload = {"engine": "tesseract", "page": page, "total_pages": pages,
-               "image": None, "regions": [], "page_text": "", "page_source": None}
-    text_regions = read_pdf_text_regions(data, page)
-    ocr_region_count = 0
+    payload = {"engine": "pdf-text", "page": page, "total_pages": pages,
+               "image": None, "regions": read_pdf_text_regions(data, page),
+               "page_text": "", "page_source": None}
     try:
         jpeg = render_pdf_page(data, page)
         payload["image"] = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
-        code, output = read_image_regions(jpeg, ".jpg", max_dimension=1600)
-        if code:
-            payload["regions"] = text_regions
-            payload["warning"] = "Halaman ditampilkan, tetapi OCR lokal tidak berhasil memetakan teks pada gambar."
-        else:
-            ocr = json.loads(output)
-            ocr_region_count = len(ocr["regions"])
-            payload["regions"] = merge_regions(text_regions, ocr["regions"])
-            payload["page_text"] = ocr.get("text", "")
-            if payload["page_text"]:
-                payload["page_source"] = "tesseract"
-            if not payload["regions"]:
-                payload["warning"] = "Teks PDF dan OCR lokal tidak menemukan kotak pada halaman ini. Coba lagi atau unggah halaman sebagai gambar."
-        if text_regions and (not payload["page_text"] or
-                             ocr_region_count <= len(text_regions) * 2 + 5):
-            payload["page_text"] = "\n".join(region["text"] for region in text_regions)
-            payload["page_source"] = "pdf-text"
-        if text_regions:
-            payload["engine"] = "pdf-text+tesseract"
     except (OSError, ValueError, subprocess.TimeoutExpired):
         payload["warning"] = "Halaman ini tidak dapat dirender. Coba lagi atau lanjut ke halaman berikutnya."
     return 0, json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -364,16 +177,11 @@ def main() -> int:
     try:
         data = sys.stdin.buffer.read(10 * 1024 * 1024 + 1)
         if extension in IMAGE_EXTENSIONS:
-            if len(sys.argv) > 2 and sys.argv[2] == "prepare-vision":
-                code, output = prepare_image(data, extension, for_vision=True)
-            elif len(sys.argv) > 2 and sys.argv[2] == "regions":
-                code, output = read_image_regions(data, extension)
-            else:
-                code, output = read_image_text(data, extension)
+            code, output = prepare_image(data, extension)
             if code:
                 return code
-        elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2] in {"pdf-convert", "pdf-convert-ai"}:
-            code, output = read_pdf_text(data, use_vision=sys.argv[2] == "pdf-convert-ai")
+        elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2] == "pdf-convert":
+            code, output = read_pdf_text(data)
             if code:
                 return code
         elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2].startswith("pdf-preview:"):

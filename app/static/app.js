@@ -13,16 +13,16 @@ const objectUrls = new Set();
 const supported = new Set(['pdf', 'docx', 'pptx', 'xlsx', 'txt', 'csv', 'json', 'png', 'jpg', 'jpeg', 'webp']);
 const imageFormats = new Set(['png', 'jpg', 'jpeg', 'webp']);
 const maxBytes = 10 * 1024 * 1024;
-const maxQueue = 12;
 let running = false;
 let failed = 0;
+let skipped = 0;
 
 function formatBytes(bytes) {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 function updateStatus() {
   const waiting = queue.length + Number(running);
-  status.textContent = `${completed.length} selesai · ${failed} gagal · ${waiting} dalam antrean/proses`;
+  status.textContent = `${completed.length} selesai · ${skipped} dilewati · ${failed} gagal · ${waiting} dalam antrean/proses`;
   downloadAll.disabled = downloadCombined.disabled = !completed.length;
 }
 function saveBlob(blob, filename) {
@@ -74,19 +74,23 @@ function markError(item, message) {
   failed += 1;
   updateStatus();
 }
+function markSkipped(item, message) {
+  item.state.textContent = message;
+  item.progress.value = 0;
+  skipped += 1;
+  updateStatus();
+}
 function addFiles(files) {
   const selected = Array.from(files);
   if (!selected.length) return;
-  let omitted = 0;
   for (const file of selected) {
-    if (queue.length + Number(running) >= maxQueue) { omitted += 1; continue; }
     const item = makeRow(file);
     if (!supported.has(item.extension)) markError(item, 'Format tidak didukung');
     else if (!file.size || file.size > maxBytes) markError(item, 'Ukuran harus 1 byte–10 MB');
     else queue.push(item);
   }
   updateStatus();
-  notice.textContent = omitted ? `${omitted} berkas belum dimasukkan (maksimum 12 antrean). Letakkan lagi setelah antrean berkurang.` : '';
+  notice.textContent = '';
   void processQueue();
 }
 function upload(item) {
@@ -113,7 +117,10 @@ function upload(item) {
       } else {
         let message = `HTTP ${xhr.status}`;
         try { message = JSON.parse(xhr.responseText).detail || message; } catch { /* Use HTTP status. */ }
-        reject(new Error(message));
+        const error = new Error(message);
+        error.status = xhr.status;
+        error.retryAfter = Number(xhr.getResponseHeader('Retry-After')) || 3;
+        reject(error);
       }
     });
     xhr.addEventListener('error', () => reject(new Error('Koneksi terputus')));
@@ -148,7 +155,7 @@ function showRegions(layer, regions, message) {
     box.style.width = `${Math.max(0, Math.min(100, region.w * 100))}%`;
     box.style.height = `${Math.max(0, Math.min(100, region.h * 100))}%`;
     box.title = region.text;
-    box.setAttribute('aria-label', `${region.source === 'pdf-text' ? 'Teks lapisan PDF' : 'Teks OCR lokal'}: ${region.text}`);
+    box.setAttribute('aria-label', `${region.source === 'pdf-text' ? 'Teks lapisan PDF' : 'Teks Qwen'}: ${region.text}`);
     box.addEventListener('click', () => {
       layer.querySelector('.selected')?.classList.remove('selected');
       box.classList.add('selected');
@@ -157,8 +164,8 @@ function showRegions(layer, regions, message) {
     layer.append(box);
   }
   message.textContent = layer.childElementCount
-    ? `${layer.childElementCount} area teks ditandai dari ${regions.some(region => region.source === 'pdf-text') ? 'lapisan PDF dan OCR lokal' : 'OCR lokal'}. Klik kotak untuk membaca per area.`
-    : 'Tidak ada area teks yang terdeteksi pada halaman ini. Hasil Markdown tetap tersedia di sebelahnya.';
+    ? `${layer.childElementCount} area teks ditandai dari ${regions.some(region => region.source === 'pdf-text') ? 'lapisan PDF dan Qwen' : 'Qwen'}. Klik kotak untuk membaca per area.`
+    : 'Qwen tidak memberikan koordinat kotak untuk halaman ini. Hasil teks tetap tersedia di sebelahnya.';
 }
 function renderDetail(item, markdown, engine, record) {
   const actions = document.createElement('div');
@@ -190,7 +197,7 @@ function renderDetail(item, markdown, engine, record) {
   let transcriptHint;
   if (imageFormats.has(item.extension)) {
     details.open = true;
-    const source = makePane('Gambar sumber', 'Kotak: OCR lokal');
+    const source = makePane('Gambar sumber', 'Kotak: Qwen3.8-Max');
     const zoom = document.createElement('button');
     zoom.type = 'button';
     zoom.className = 'zoom-button';
@@ -202,7 +209,7 @@ function renderDetail(item, markdown, engine, record) {
     source.querySelector('.detail-pane-head').append(zoom);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
-    legend.textContent = '▣ Kotak merah menandai area OCR lokal. Klik kotaknya untuk melihat teks.';
+    legend.textContent = '▣ Kotak merah menandai area yang dipetakan Qwen. Klik untuk melihat teks.';
     source.append(legend);
     const scroll = document.createElement('div');
     scroll.className = 'image-scroll';
@@ -228,7 +235,7 @@ function renderDetail(item, markdown, engine, record) {
         image.src = URL.createObjectURL(item.file);
         objectUrls.add(image.src);
       }
-      regionMessage.textContent = 'Memetakan lokasi teks dengan OCR lokal…';
+      regionMessage.textContent = 'Memetakan lokasi teks dengan Qwen…';
       try {
         const response = await fetch('/api/regions', {
           method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
@@ -246,7 +253,7 @@ function renderDetail(item, markdown, engine, record) {
     details.open = true;
     summary.textContent = 'Halaman PDF dan hasil OCR · klik untuk sembunyikan';
     single.disabled = copy.disabled = true;
-    const source = makePane('Halaman PDF dan kotak teks', 'Lapisan PDF + OCR lokal');
+    const source = makePane('Halaman PDF dan kotak teks', 'Lapisan PDF + Qwen');
     const zoom = document.createElement('button');
     zoom.type = 'button';
     zoom.className = 'zoom-button';
@@ -271,7 +278,7 @@ function renderDetail(item, markdown, engine, record) {
     controls.append(previous, pageLabel, next, retry, scanAll);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
-    legend.textContent = '▣ Kotak merah menandai teks dari lapisan PDF dan OCR lokal pada gambar. Klik untuk membaca per area.';
+    legend.textContent = '▣ Kotak merah menandai teks lapisan PDF dan area yang dipetakan Qwen. Klik untuk membaca per area.';
     const scroll = document.createElement('div');
     scroll.className = 'image-scroll pdf-preview-scroll is-loading';
     scroll.setAttribute('aria-busy', 'true');
@@ -299,7 +306,7 @@ function renderDetail(item, markdown, engine, record) {
     let scanning = false, cancelScan = false;
     const pageCache = new Map();
     const extractedPages = new Map();
-    let transcriptEngine = 'OCR lokal';
+    let transcriptEngine = 'Qwen3.8-Max';
     const updateTranscript = (page, pageText, pageSource) => {
       const sections = [...extractedPages].sort(([a], [b]) => a - b)
         .map(([number, text]) => `## Halaman ${number} (${transcriptEngine})\n\n${text}`);
@@ -377,9 +384,7 @@ function renderDetail(item, markdown, engine, record) {
         pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
         showRegions(layer, payload.regions, regionMessage);
         const pageText = payload.page_text.trim();
-        if (payload.page_source === 'sumopod') transcriptEngine = 'GPT vision · gpt-4o-mini';
-        if ((payload.page_source === 'sumopod' || payload.page_source === 'tesseract') &&
-            pageText && (payload.page_source === 'sumopod' || !payload.warning)) {
+        if (payload.page_source === 'qwen' && pageText) {
           extractedPages.set(page, pageText);
         }
         updateTranscript(page, pageText, payload.page_source);
@@ -389,9 +394,9 @@ function renderDetail(item, markdown, engine, record) {
         previewStatus.classList.toggle('is-error', !previewUrl);
         if (!previewUrl) previewStatus.textContent = 'Halaman ini belum dapat ditampilkan.';
         retry.hidden = !payload.warning;
-        if (!payload.warning || payload.page_source === 'sumopod') pageCache.set(page, payload);
+        if (!payload.warning || payload.page_source === 'qwen') pageCache.set(page, payload);
         loaded = true;
-        return !payload.warning || payload.page_source === 'sumopod';
+        return !payload.warning || payload.page_source === 'qwen';
       } catch (error) {
         if (pendingUrl) { URL.revokeObjectURL(pendingUrl); objectUrls.delete(pendingUrl); }
         if (previewUrl) { URL.revokeObjectURL(previewUrl); objectUrls.delete(previewUrl); previewUrl = null; }
@@ -457,7 +462,7 @@ function renderDetail(item, markdown, engine, record) {
     });
     loadRegions = async () => { if (!loaded) await showPage(1); };
   }
-  const engineLabel = engine === 'sumopod' || engine === 'sumopod-pdf-pending' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
+  const engineLabel = engine === 'qwen3.8-max' ? 'Qwen3.8-Max' : item.extension === 'pdf' ? 'MarkItDown · Qwen3.8-Max' : 'MarkItDown';
   const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
   transcriptHint = transcript.querySelector('.detail-pane-head small');
   const pre = document.createElement('pre');
@@ -468,9 +473,9 @@ function renderDetail(item, markdown, engine, record) {
   const note = document.createElement('p');
   note.className = 'detail-note';
   note.textContent = imageFormats.has(item.extension)
-    ? 'Kotak dan teks per area berasal dari Tesseract lokal. Hasil Markdown di sebelahnya berasal dari mesin yang tertera dan belum disejajarkan dengan kotak secara otomatis.'
+    ? 'Transkripsi dan lokasi kotak berasal dari Qwen3.8-Max. Kotak dapat tidak lengkap bila model tidak memberikan koordinat.'
     : item.extension === 'pdf'
-      ? 'Halaman PDF ditranskripsikan otomatis dengan GPT vision bila SumoPod aktif. Kotak merah dipetakan oleh lapisan PDF dan Tesseract lokal. Hasil GPT tampil di awal panel kanan dan masuk ke unduhan Markdown; gunakan Sebelumnya/Berikutnya untuk menelusuri halaman.'
+      ? 'Halaman PDF ditranskripsikan otomatis oleh Qwen3.8-Max. Kotak berasal dari lapisan teks PDF dan koordinat Qwen. Hasilnya tampil di awal panel kanan dan masuk ke unduhan Markdown.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
   details.append(summary, grid, note);
   if (loadRegions && item.extension !== 'pdf') {
@@ -488,8 +493,18 @@ async function processQueue() {
     item.state.textContent = 'Mengunggah…';
     updateStatus();
     try {
-      const {markdown, engine} = await upload(item);
-      const label = engine === 'sumopod' || engine === 'sumopod-pdf-pending' ? 'SumoPod · gpt-4o-mini' : engine === 'tesseract-pdf-partial' ? 'OCR lokal · sebagian' : engine === 'tesseract' || engine === 'tesseract-pdf' ? 'OCR lokal' : 'MarkItDown';
+      let result;
+      while (!result) {
+        try { result = await upload(item); }
+        catch (error) {
+          if (error.status !== 429) throw error;
+          const seconds = Math.min(120, Math.max(1, error.retryAfter));
+          item.state.textContent = `Menunggu giliran server ${seconds} detik…`;
+          await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+        }
+      }
+      const {markdown, engine} = result;
+      const label = engine === 'qwen3.8-max' ? 'Qwen3.8-Max' : 'MarkItDown';
       item.state.textContent = item.extension === 'pdf' ? 'Menyiapkan OCR halaman PDF…' :
         markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       const record = {name: item.file.name, markdown};
@@ -500,7 +515,10 @@ async function processQueue() {
       item.progress.value = 100;
       item.row.classList.add('done');
       completed.push(record);
-    } catch (error) { markError(item, error.message || 'Konversi gagal'); }
+    } catch (error) {
+      if (error.status === 413 && error.message.startsWith('Dilewati: PDF')) markSkipped(item, error.message);
+      else markError(item, error.message || 'Konversi gagal');
+    }
     updateStatus();
   }
   running = false;
@@ -545,7 +563,7 @@ fetch('/api/capabilities', {cache: 'no-store'})
   .then((response) => response.json())
   .then(({image_ocr, image_ocr_model}) => {
     ocrMode.textContent = image_ocr === 'sumopod'
-      ? `OCR PDF dan gambar: SumoPod (${image_ocr_model}). Halaman PDF dan gambar dikirim ke SumoPod; kotak dipetakan secara lokal.`
-      : 'OCR gambar: lokal (Indonesia dan Inggris). Gambar tidak dikirim ke penyedia AI.';
+      ? `OCR PDF dan gambar: ${image_ocr_model} melalui SumoPod. PDF maksimal 30 halaman.`
+      : 'OCR tidak tersedia: atur SUMOPOD_API_KEY untuk Qwen3.8-Max.';
   })
   .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });

@@ -32,7 +32,7 @@
           <span class="drop-action" aria-hidden="true">Pilih berkas <span>↗</span></span>
         </button>
         <input id="picker" type="file" accept=".pdf,.docx,.pptx,.xlsx,.txt,.csv,.json,.png,.jpg,.jpeg,.webp" multiple hidden>
-        <p id="upload-hint" class="hint">PNG, JPG, WebP, PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON · hingga 10 MB per berkas · 12 berkas per antrean.</p>
+        <p id="upload-hint" class="hint">PNG, JPG, WebP, PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON · hingga 10 MB per berkas · PDF maksimal 30 halaman · jumlah PDF dalam antrean tidak dibatasi.</p>
         <p id="ocr-mode" class="ocr-mode" role="status">Memeriksa layanan OCR…</p>
       </div>
     </section>
@@ -61,7 +61,7 @@
       </div>
       <ol id="files" class="file-list"></ol>
     </section>
-    <footer>Berkas diproses dalam memori server dan tidak disimpan permanen. Pratinjau lokasi teks memakai OCR lokal; hasil transkripsi gambar memakai mesin yang tertera pada setiap berkas.</footer>
+    <footer>Berkas diproses dalam memori server dan tidak disimpan permanen. OCR gambar dan halaman PDF menggunakan Qwen3.8-Max melalui SumoPod.</footer>
   </main>
 </body>
 </html>
