@@ -104,7 +104,7 @@ def test_deepseek_is_only_image_ocr_and_region_source(client, monkeypatch):
                                           "text": "TEKS GAMBAR", "source": "deepseek"}]
     assert len(seen) == 2
     assert all(item[1]["json"]["model"] == "deepseek-v4-flash-vision-exp" for item in seen)
-    assert all(item[1]["json"]["thinking"] == {"type": "disabled"} for item in seen)
+    assert all(set(item[1]["json"]) == {"model", "messages", "max_tokens"} for item in seen)
     assert all(item[0] == "https://ai.sumopod.com/v1/chat/completions" for item in seen)
     assert seen[0][1]["json"]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
 
