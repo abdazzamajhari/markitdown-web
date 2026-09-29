@@ -93,11 +93,11 @@ def fake_provider(monkeypatch, markdown="TEKS GAMBAR", regions=None):
 
 def test_home_and_configuration(client, monkeypatch):
     assert client.get("/health").json() == {"status": "ok"}
-    assert client.get("/api/capabilities").json() == {"image_ocr": "unavailable", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
+    assert client.get("/api/capabilities").json() == {"image_ocr": "unavailable", "image_ocr_model": "deepseek-v4.1-flash"}
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
-    assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
+    assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4.1-flash"}
     monkeypatch.setenv("DEEPSEEK_API_KEY", "ignored-key")
-    assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4-flash-vision-exp"}
+    assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4.1-flash"}
     assert "MarkItDown Web" in client.get("/").text
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
 
@@ -137,13 +137,13 @@ def test_deepseek_is_only_image_ocr_and_region_source(client, monkeypatch):
     ])
     response = upload(client, "gambar.png", image_bytes())
     assert response.status_code == 200 and response.text == "TEKS GAMBAR"
-    assert response.headers["x-ocr-engine"] == "deepseek-v4-flash-vision-exp"
+    assert response.headers["x-ocr-engine"] == "deepseek-v4.1-flash"
     regions = upload(client, "gambar.png", image_bytes(), "/api/regions")
     assert regions.status_code == 200
     assert regions.json()["regions"] == [{"x": .1, "y": .2, "w": .5, "h": .1,
                                           "text": "TEKS GAMBAR", "source": "deepseek"}]
     assert len(seen) == 2
-    assert all(item[1]["json"]["model"] == "deepseek-v4-flash-vision-exp" for item in seen)
+    assert all(item[1]["json"]["model"] == "deepseek-v4.1-flash" for item in seen)
     assert all(item[1]["json"]["thinking"] == {"type": "disabled"} and "reasoning_effort" not in item[1]["json"] for item in seen)
     assert all(item[0] == "https://ai.sumopod.com/v1/chat/completions" for item in seen)
     assert seen[0][1]["json"]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
