@@ -403,7 +403,7 @@ function renderDetail(item, markdown, engine, record) {
           fatalOcrError = [402, 502, 503, 504].includes(payload.ocr_status);
           regionMessage.textContent = `${payload.ocr_error} Gambar PDF tetap ditampilkan; teks di sebelah kanan berasal dari lapisan PDF saja.`;
         } else if (payload.preview_only) {
-          regionMessage.textContent = 'Pratinjau PDF tanpa OCR. Setelah akses API pulih, unggah ulang berkas untuk mengekstraksi semua halaman.';
+          regionMessage.textContent = 'Halaman PDF sudah dirender menjadi gambar penuh. OCR SumoPod belum berhasil membaca gambar uji; tulisan di dalam gambar belum terekstraksi.';
         } else if (payload.warning) {
           regionMessage.textContent = payload.warning;
         } else {
