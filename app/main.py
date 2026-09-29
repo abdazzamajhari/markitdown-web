@@ -172,6 +172,7 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
                 {"type": "input_image", "image_url": image_url, "detail": "original"},
             ]}],
             "max_output_tokens": max_tokens,
+            "reasoning": {"effort": "low" if thinking else "none"},
         }
     else:
         payload = {
