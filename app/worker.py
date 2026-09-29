@@ -105,6 +105,21 @@ def read_pdf_text_regions(data: bytes, page: int) -> list[dict]:
         return []
 
 
+def read_pdf_page_text(data: bytes, page: int) -> str:
+    """Return selectable text from one page even when image OCR is unavailable."""
+    try:
+        result = subprocess.run(
+            ["pdftotext", "-f", str(page), "-l", str(page), "-layout", "-enc", "UTF-8", "-", "-"],
+            input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            check=False, timeout=5,
+        )
+        if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
+            return ""
+        return result.stdout.decode("utf-8", errors="replace").strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
 def pdf_pages(data: bytes) -> int:
     result = subprocess.run(
         ["pdfinfo", "-"], input=data, stdout=subprocess.PIPE,
@@ -150,7 +165,7 @@ def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
         return 7, b""
     payload = {"engine": "pdf-text", "page": page, "total_pages": pages,
                "image": None, "regions": read_pdf_text_regions(data, page),
-               "page_text": "", "page_source": None}
+               "page_text": read_pdf_page_text(data, page), "page_source": "pdf-text"}
     try:
         jpeg = render_pdf_page(data, page)
         payload["image"] = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
