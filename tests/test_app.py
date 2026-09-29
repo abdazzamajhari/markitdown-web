@@ -40,6 +40,45 @@ def pdf_bytes(pages=2):
     return buffer.getvalue()
 
 
+def text_layer_pdf_bytes():
+    """A one-page PDF with selectable text and no external test dependency."""
+    stream = b"BT /F1 12 Tf 72 720 Td (LAPISAN TERBACA) Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for number, obj in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf.extend(str(number).encode() + b" 0 obj\n" + obj + b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode())
+    pdf.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+    return bytes(pdf)
+
+
+def test_pdf_text_layer_remains_visible_when_ocr_fails(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    monkeypatch.setattr("app.main.httpx.post", lambda *args, **kwargs: httpx.Response(402))
+    pdf = text_layer_pdf_bytes()
+    response = upload(client, "text.pdf", pdf, "/api/pdf-preview?page=1")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ocr_status"] == 402
+    assert payload["page_source"] == "pdf-text"
+    assert "LAPISAN TERBACA" in payload["page_text"]
+    assert any("LAPISAN TERBACA" in region["text"] for region in payload["regions"])
+    preview = upload(client, "text.pdf", pdf, "/api/pdf-preview?page=1&preview_only=true")
+    assert preview.status_code == 200
+    assert preview.json()["page_text"] == payload["page_text"]
+
+
 def fake_provider(monkeypatch, markdown="TEKS GAMBAR", regions=None):
     requests = []
 
