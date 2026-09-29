@@ -197,7 +197,7 @@ function renderDetail(item, markdown, engine, record) {
   let transcriptHint;
   if (imageFormats.has(item.extension)) {
     details.open = true;
-    const source = makePane('Gambar sumber', 'Kotak: DeepSeek V4.1 Flash');
+    const source = makePane('Gambar sumber', 'Kotak: DeepSeek V4.1 Flash · Netra');
     const zoom = document.createElement('button');
     zoom.type = 'button';
     zoom.className = 'zoom-button';
@@ -307,7 +307,7 @@ function renderDetail(item, markdown, engine, record) {
     let scanning = false, cancelScan = false;
     const pageCache = new Map();
     const extractedPages = new Map();
-    let transcriptEngine = 'DeepSeek V4.1 Flash';
+    let transcriptEngine = 'DeepSeek V4.1 Flash · Netra';
     const updateTranscript = (page, pageText, pageSource) => {
       const sections = [...extractedPages].sort(([a], [b]) => a - b)
         .map(([number, text]) => `## Halaman ${number} (${transcriptEngine})\n\n${text}`);
@@ -494,7 +494,7 @@ function renderDetail(item, markdown, engine, record) {
     });
     loadRegions = async () => { if (!loaded) await showPage(1); };
   }
-  const engineLabel = engine === 'deepseek-v4.1-flash' ? 'DeepSeek V4.1 Flash' : item.extension === 'pdf' ? 'MarkItDown · DeepSeek V4.1 Flash' : 'MarkItDown';
+  const engineLabel = engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : item.extension === 'pdf' ? 'MarkItDown · DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
   const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
   transcriptHint = transcript.querySelector('.detail-pane-head small');
   const pre = document.createElement('pre');
@@ -505,9 +505,9 @@ function renderDetail(item, markdown, engine, record) {
   const note = document.createElement('p');
   note.className = 'detail-note';
   note.textContent = imageFormats.has(item.extension)
-    ? 'Transkripsi dan lokasi kotak berasal dari DeepSeek V4.1 Flash. Kotak dapat tidak lengkap bila model tidak memberikan koordinat.'
+    ? 'Transkripsi dan lokasi kotak berasal dari DeepSeek V4.1 Flash · Netra. Kotak dapat tidak lengkap bila model tidak memberikan koordinat.'
     : item.extension === 'pdf'
-      ? 'Halaman PDF ditranskripsikan otomatis oleh DeepSeek V4.1 Flash. Kotak berasal dari lapisan teks PDF dan koordinat DeepSeek. Hasilnya tampil di awal panel kanan dan masuk ke unduhan Markdown.'
+      ? 'Halaman PDF ditranskripsikan otomatis oleh DeepSeek V4.1 Flash · Netra. Kotak berasal dari lapisan teks PDF dan koordinat DeepSeek. Hasilnya tampil di awal panel kanan dan masuk ke unduhan Markdown.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
   details.append(summary, grid, note);
   if (loadRegions && item.extension !== 'pdf') {
@@ -536,7 +536,7 @@ async function processQueue() {
         }
       }
       const {markdown, engine} = result;
-      const label = engine === 'deepseek-v4.1-flash' ? 'DeepSeek V4.1 Flash' : 'MarkItDown';
+      const label = engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
       item.state.textContent = item.extension === 'pdf' ? 'Menyiapkan OCR halaman PDF…' :
         markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       const record = {name: item.file.name, markdown};
