@@ -257,7 +257,7 @@ def verify_vision() -> None:
         try:
             answer = request_vision(buffer.getvalue(), "image/png",
                                     "Baca kata besar pada gambar. Balas hanya kata itu.",
-                                    max_tokens=256, thinking=False, route=route)
+                                    max_tokens=4096, thinking=False, route=route)
         except HTTPException as exc:
             if exc.status_code in {402, 429} or (exc.status_code == 503 and "Kunci" in str(exc.detail)):
                 raise
