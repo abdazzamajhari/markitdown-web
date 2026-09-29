@@ -274,6 +274,7 @@ def test_responses_route_sends_inline_image_and_reads_output(client, monkeypatch
     assert answer == "KUCING"
     assert seen[0][0] == "https://ai.sumopod.com/v1/responses"
     assert seen[0][1]["input"][0]["content"][1]["image_url"].startswith("data:image/png;base64,")
+    assert seen[0][1]["reasoning"] == {"effort": "none"}
 
 
 def test_pdf_ocr_each_page_and_boxes(client, monkeypatch):
