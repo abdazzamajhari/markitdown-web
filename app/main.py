@@ -36,7 +36,7 @@ MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 MAX_REQUESTS_PER_MINUTE = 12
 SUMOPOD_URL = "https://ai.sumopod.com/v1/chat/completions"
-SUMOPOD_MODEL = "deepseek-v4-flash-vision-exp"
+SUMOPOD_MODEL = "deepseek-flash"
 vision_probe_ok = False
 vision_probe_retry_at = 0.0
 OCR_PROMPT = (
@@ -228,9 +228,9 @@ def verify_vision() -> None:
         draw = ImageDraw.Draw(sample)
         draw.text((55, 95), code, fill="black", font=ImageFont.load_default(size=72))
         buffer = BytesIO()
-        sample.save(buffer, format="JPEG", quality=95)
+        sample.save(buffer, format="PNG")
     try:
-        answer = request_vision(buffer.getvalue(), "image/jpeg",
+        answer = request_vision(buffer.getvalue(), "image/png",
                                 "Baca kata besar pada gambar. Balas hanya kata itu.",
                                 max_tokens=256, thinking=False)
     except HTTPException as exc:
