@@ -247,6 +247,19 @@ def test_empty_provider_result_is_not_reported_as_success(client, monkeypatch):
     assert preview.json()["image"].startswith("data:image/jpeg;base64,")
 
 
+def test_vision_probe_reports_missing_image_response(monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.secrets, "choice", lambda choices: "MERAH")
+    monkeypatch.setattr(app_main, "vision_probe_ok", False)
+    monkeypatch.setattr(app_main, "vision_probe_retry_at", 0.0)
+    monkeypatch.setattr(app_main, "request_vision",
+                        lambda *args, **kwargs: "Tidak ada gambar" if kwargs["route"] == "chat" else "PADAMU NEGERI")
+    with pytest.raises(app_main.HTTPException) as caught:
+        app_main.verify_vision()
+    assert caught.value.status_code == 503
+    assert "SumoPod menyatakan gambar tidak tersedia" in caught.value.detail
+
+
 def test_rejects_provider_that_ignores_image(monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
