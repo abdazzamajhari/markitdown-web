@@ -163,9 +163,10 @@ def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
         return 8, b""
     if page < 1 or page > pages:
         return 7, b""
+    page_text = read_pdf_page_text(data, page)
     payload = {"engine": "pdf-text", "page": page, "total_pages": pages,
                "image": None, "regions": read_pdf_text_regions(data, page),
-               "page_text": read_pdf_page_text(data, page), "page_source": "pdf-text"}
+               "page_text": page_text, "page_source": "pdf-text" if page_text else None}
     try:
         jpeg = render_pdf_page(data, page)
         payload["image"] = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
