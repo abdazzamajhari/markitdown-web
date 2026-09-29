@@ -253,6 +253,7 @@ def verify_vision() -> None:
         buffer = BytesIO()
         sample.save(buffer, format="PNG")
     failures = []
+    image_missing_reply = False
     for route in ("chat", "responses"):
         try:
             answer = request_vision(buffer.getvalue(), "image/png",
@@ -270,10 +271,15 @@ def verify_vision() -> None:
             logging.getLogger(__name__).info("SumoPod vision route verified: %s", route)
             return
         failures.append("jawaban tidak cocok")
+        if re.search(r"tidak ada gambar|gambar tidak ada|no image|image not provided", answer, re.IGNORECASE):
+            image_missing_reply = True
         logging.getLogger(__name__).warning(
             "SumoPod vision probe mismatch: route=%s expected=%s response=%r",
             route, code, answer[:160])
     vision_probe_retry_at = now + 60
+    if image_missing_reply:
+        raise HTTPException(503, "Rute SumoPod menyatakan gambar tidak tersedia meskipun aplikasi mengirim PNG base64. "
+                            "Periksa penerusan input gambar pada SumoPod.")
     if len(failures) == 2 and all("terpotong" in reason for reason in failures):
         raise HTTPException(503, "SumoPod memotong jawaban gambar uji pada kedua rute. "
                             "Model menghabiskan keluaran sebelum teks OCR tersedia.")
