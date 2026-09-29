@@ -20,6 +20,7 @@ def client(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr(app_main, "verify_vision", lambda: None)
     monkeypatch.setattr(app_main, "vision_route", "chat")
+    monkeypatch.setattr(app_main, "vision_minimal", False)
     return TestClient(app)
 
 
@@ -286,7 +287,7 @@ def test_vision_probe_reads_simple_word_without_reasoning(monkeypatch):
 
     monkeypatch.setattr(app_main, "request_vision", probe)
     app_main.verify_vision()
-    assert calls == [{"max_tokens": 4096, "thinking": False, "route": "chat"}]
+    assert calls == [{"max_tokens": 4096, "thinking": False, "route": "chat", "minimal": False}]
 
 
 
@@ -327,6 +328,48 @@ def test_responses_route_sends_inline_image_and_reads_output(client, monkeypatch
     assert seen[0][0] == "https://ai.sumopod.com/v1/responses"
     assert seen[0][1]["input"][0]["content"][1]["image_url"].startswith("data:image/png;base64,")
     assert seen[0][1]["reasoning"] == {"effort": "none"}
+
+
+def test_vision_probe_selects_minimal_payload(monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.secrets, "choice", lambda choices: "MERAH")
+    monkeypatch.setattr(app_main, "vision_probe_ok", False)
+    monkeypatch.setattr(app_main, "vision_probe_retry_at", 0.0)
+    monkeypatch.setattr(app_main, "vision_minimal", False)
+    seen = []
+
+    def probe(image, mime_type, prompt, **kwargs):
+        seen.append((kwargs["route"], kwargs["minimal"]))
+        return "MERAH" if kwargs["minimal"] and kwargs["route"] == "chat" else "LAIN"
+
+    monkeypatch.setattr(app_main, "request_vision", probe)
+    app_main.verify_vision()
+    assert seen == [("chat", False), ("responses", False), ("chat", True)]
+    assert app_main.vision_route == "chat"
+    assert app_main.vision_minimal is True
+    monkeypatch.setattr(app_main, "vision_probe_ok", False)
+
+
+def test_minimal_payload_keeps_image_and_omits_optional_controls(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    seen = []
+
+    def fake_post(url, **kwargs):
+        seen.append((url, kwargs["json"]))
+        if url.endswith("/responses"):
+            return httpx.Response(200, json={"status": "completed", "output_text": "MERAH"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "MERAH"}}]})
+
+    monkeypatch.setattr(app_main.httpx, "post", fake_post)
+    assert app_main.request_vision(b"PNG", "image/png", "Baca teks", minimal=True) == "MERAH"
+    assert app_main.request_vision(b"PNG", "image/png", "Baca teks", route="responses", minimal=True) == "MERAH"
+    chat, responses = seen[0][1], seen[1][1]
+    assert "thinking" not in chat
+    assert "detail" not in chat["messages"][0]["content"][1]["image_url"]
+    assert chat["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert "reasoning" not in responses
+    assert "detail" not in responses["input"][0]["content"][1]
+    assert responses["input"][0]["content"][1]["image_url"].startswith("data:image/png;base64,")
 
 
 def test_pdf_ocr_each_page_and_boxes(client, monkeypatch):
