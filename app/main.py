@@ -36,9 +36,11 @@ MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 MAX_REQUESTS_PER_MINUTE = 12
 SUMOPOD_URL = "https://ai.sumopod.com/v1/chat/completions"
+SUMOPOD_RESPONSES_URL = "https://ai.sumopod.com/v1/responses"
 SUMOPOD_MODEL = "deepseek-flash"
 vision_probe_ok = False
 vision_probe_retry_at = 0.0
+vision_route = "chat"
 OCR_PROMPT = (
     "Transcribe every visible word in this document image, including tables and text inside pictures. "
     "Preserve spelling, language, numbers and reading order. Format tables as Markdown. "
@@ -156,23 +158,33 @@ def vision_provider() -> tuple[str, str, str]:
     raise HTTPException(503, "Atur SUMOPOD_API_KEY di Render untuk OCR melalui SumoPod")
 
 
-def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 8192, timeout: int = 80, thinking: bool = False) -> str:
+def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 8192, timeout: int = 80, thinking: bool = False, route: str = "chat") -> str:
     url, key, provider = vision_provider()
     if len(image) > MAX_BYTES:
         raise HTTPException(413, "Gambar terlalu besar untuk OCR AI")
-    payload = {
-        "model": SUMOPOD_MODEL,
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {
-                "url": f"data:{mime_type};base64," + base64.b64encode(image).decode("ascii"),
-            }},
-        ]}],
-        "thinking": {"type": "enabled" if thinking else "disabled"},
-        "max_tokens": max_tokens,
-    }
-    if thinking:
-        payload["reasoning_effort"] = "low"
+    image_url = f"data:{mime_type};base64," + base64.b64encode(image).decode("ascii")
+    if route == "responses":
+        url = SUMOPOD_RESPONSES_URL
+        payload = {
+            "model": SUMOPOD_MODEL,
+            "input": [{"role": "user", "content": [
+                {"type": "input_text", "text": prompt},
+                {"type": "input_image", "image_url": image_url, "detail": "original"},
+            ]}],
+            "max_output_tokens": max_tokens,
+        }
+    else:
+        payload = {
+            "model": SUMOPOD_MODEL,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url, "detail": "original"}},
+            ]}],
+            "thinking": {"type": "enabled" if thinking else "disabled"},
+            "max_tokens": max_tokens,
+        }
+        if thinking:
+            payload["reasoning_effort"] = "low"
     try:
         result = httpx.post(
             url, json=payload,
@@ -192,31 +204,41 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
         raise HTTPException(429, f"Batas pemakaian {provider} tercapai; coba lagi nanti",
                             headers={"Retry-After": "60"})
     if result.status_code != 200:
-        raise HTTPException(502, f"{provider} mengembalikan HTTP {result.status_code}")
+        raise HTTPException(502, f"{provider} mengembalikan HTTP {result.status_code} pada {route}")
     if len(result.content) > MAX_OUTPUT_BYTES + 65536:
         raise HTTPException(502, f"Jawaban {provider} terlalu besar")
     try:
         reply = result.json()
-        choice = reply["choices"][0]
-        content = choice["message"]["content"]
+        if route == "responses":
+            content = reply.get("output_text")
+            if not isinstance(content, str):
+                content = "\n".join(
+                    part["text"] for item in reply["output"]
+                    for part in item.get("content", [])
+                    if part.get("type") == "output_text" and isinstance(part.get("text"), str)
+                )
+            if reply.get("status") == "incomplete":
+                raise HTTPException(502, "Transkripsi DeepSeek terpotong; coba lagi pada halaman ini")
+        else:
+            choice = reply["choices"][0]
+            content = choice["message"]["content"]
+            if choice.get("finish_reason") == "length":
+                reasoning = choice["message"].get("reasoning_content") or ""
+                usage = reply.get("usage") or {}
+                logging.getLogger(__name__).warning(
+                    "SumoPod truncated OCR: model=%r content_chars=%d reasoning_chars=%d completion_tokens=%r",
+                    reply.get("model"), len(content or ""), len(reasoning), usage.get("completion_tokens"))
+                raise HTTPException(502, "Transkripsi DeepSeek terpotong; coba lagi pada halaman ini")
         if not isinstance(content, str):
             raise ValueError
     except (KeyError, IndexError, TypeError, ValueError):
-        raise HTTPException(502, f"Jawaban {provider} tidak valid") from None
-    content = content.strip()
-    if choice.get("finish_reason") == "length":
-        reasoning = choice["message"].get("reasoning_content") or ""
-        usage = reply.get("usage") or {}
-        logging.getLogger(__name__).warning(
-            "SumoPod truncated OCR: model=%r content_chars=%d reasoning_chars=%d completion_tokens=%r",
-            reply.get("model"), len(content), len(reasoning), usage.get("completion_tokens"))
-        raise HTTPException(502, "Transkripsi DeepSeek terpotong; coba lagi pada halaman ini")
-    return content
+        raise HTTPException(502, f"Jawaban {provider} tidak valid pada {route}") from None
+    return content.strip()
 
 
 def verify_vision() -> None:
-    """Reject providers that accept an image but silently route it to a text-only model."""
-    global vision_probe_ok, vision_probe_retry_at
+    """Use only a SumoPod route that actually reads a fresh test image."""
+    global vision_probe_ok, vision_probe_retry_at, vision_route
     if vision_probe_ok:
         return
     now = time.monotonic()
@@ -229,26 +251,32 @@ def verify_vision() -> None:
         draw.text((55, 95), code, fill="black", font=ImageFont.load_default(size=72))
         buffer = BytesIO()
         sample.save(buffer, format="PNG")
-    try:
-        answer = request_vision(buffer.getvalue(), "image/png",
-                                "Baca kata besar pada gambar. Balas hanya kata itu.",
-                                max_tokens=256, thinking=False)
-    except HTTPException as exc:
-        if exc.status_code == 502 and "terpotong" in str(exc.detail):
-            raise HTTPException(503, "Pemeriksaan gambar SumoPod terpotong sebelum kode terbaca") from None
-        raise
-    if code not in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
-        logging.getLogger(__name__).warning("SumoPod vision probe mismatch: expected=%s response=%r",
-                                            code, answer[:160])
-        vision_probe_retry_at = now + 60
-        raise HTTPException(503, "Jawaban SumoPod tidak cocok dengan gambar uji. "
-                            "Periksa apakah rute model SumoPod meneruskan input gambar.")
-    vision_probe_ok = True
+    for route in ("chat", "responses"):
+        try:
+            answer = request_vision(buffer.getvalue(), "image/png",
+                                    "Baca kata besar pada gambar. Balas hanya kata itu.",
+                                    max_tokens=256, thinking=False, route=route)
+        except HTTPException as exc:
+            if exc.status_code in {402, 429} or (exc.status_code == 503 and "Kunci" in str(exc.detail)):
+                raise
+            logging.getLogger(__name__).warning("SumoPod vision probe route=%s failed: %s", route, exc.detail)
+            continue
+        if code in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
+            vision_route = route
+            vision_probe_ok = True
+            logging.getLogger(__name__).info("SumoPod vision route verified: %s", route)
+            return
+        logging.getLogger(__name__).warning(
+            "SumoPod vision probe mismatch: route=%s expected=%s response=%r",
+            route, code, answer[:160])
+    vision_probe_retry_at = now + 60
+    raise HTTPException(503, "Jawaban SumoPod tidak cocok dengan gambar uji pada kedua rute. "
+                        "Periksa apakah model SumoPod benar-benar meneruskan input gambar.")
 
 
 def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False, locate: bool = False) -> dict:
     verify_vision()
-    content = request_vision(image, mime_type, OCR_PROMPT)
+    content = request_vision(image, mime_type, OCR_PROMPT, route=vision_route)
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content).strip()
     try:
@@ -266,7 +294,7 @@ def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False,
     if locate and markdown and not parsed.get("regions"):
         try:
             region_content = request_vision(image, mime_type, REGIONS_PROMPT,
-                                            max_tokens=4096, timeout=25).strip()
+                                            max_tokens=4096, timeout=25, route=vision_route).strip()
             if region_content.startswith("```"):
                 region_content = re.sub(r"^```(?:json)?\s*|\s*```$", "", region_content).strip()
             region_payload = json.loads(region_content)
