@@ -19,6 +19,7 @@ def client(monkeypatch):
     monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr(app_main, "verify_vision", lambda: None)
+    monkeypatch.setattr(app_main, "vision_route", "chat")
     return TestClient(app)
 
 
@@ -242,6 +243,7 @@ def test_vision_probe_tries_responses_when_chat_ignores_image(monkeypatch):
     monkeypatch.setattr(app_main.secrets, "choice", lambda choices: "KUCING")
     monkeypatch.setattr(app_main, "vision_probe_ok", False)
     monkeypatch.setattr(app_main, "vision_probe_retry_at", 0.0)
+    monkeypatch.setattr(app_main, "vision_route", "chat")
     seen = []
 
     def probe(image, mime_type, prompt, **kwargs):
@@ -253,7 +255,6 @@ def test_vision_probe_tries_responses_when_chat_ignores_image(monkeypatch):
     assert seen == [("image/png", "chat"), ("image/png", "responses")]
     assert app_main.vision_route == "responses"
     monkeypatch.setattr(app_main, "vision_probe_ok", False)
-    monkeypatch.setattr(app_main, "vision_route", "chat")
 
 
 def test_responses_route_sends_inline_image_and_reads_output(client, monkeypatch):
