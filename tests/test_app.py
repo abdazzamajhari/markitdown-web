@@ -273,7 +273,7 @@ def test_vision_probe_reads_simple_word_without_reasoning(monkeypatch):
 
     monkeypatch.setattr(app_main, "request_vision", probe)
     app_main.verify_vision()
-    assert calls == [{"max_tokens": 256, "thinking": False, "route": "chat"}]
+    assert calls == [{"max_tokens": 4096, "thinking": False, "route": "chat"}]
 
 
 
