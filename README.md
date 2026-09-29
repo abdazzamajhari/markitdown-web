@@ -1,6 +1,6 @@
 # MarkItDown Web
 
-Aplikasi web mandiri untuk mengubah dokumen menjadi Markdown. Teks yang dapat dipilih diekstraksi dengan [microsoft/markitdown](https://github.com/microsoft/markitdown); OCR gambar dan seluruh halaman PDF memakai **`deepseek-v4-flash-vision-exp`** melalui API SumoPod. Proyek ini bukan layanan resmi Microsoft, DeepSeek, atau SumoPod.
+Aplikasi web mandiri untuk mengubah dokumen menjadi Markdown. Teks yang dapat dipilih diekstraksi dengan [microsoft/markitdown](https://github.com/microsoft/markitdown); OCR gambar dan seluruh halaman PDF memakai **`deepseek-flash`** melalui API SumoPod. Proyek ini bukan layanan resmi Microsoft, DeepSeek, atau SumoPod.
 
 ## Fitur
 
@@ -23,9 +23,9 @@ export SUMOPOD_API_KEY='kunci-sumopod-anda'
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Atau jalankan Dockerfile. Untuk OCR gambar dan PDF, atur **`SUMOPOD_API_KEY`** sebagai environment variable di Render. Aplikasi hanya memanggil `https://ai.sumopod.com/v1/chat/completions` dengan model **`deepseek-v4-flash-vision-exp`**; `DEEPSEEK_API_KEY` diabaikan. Permintaan gambar memakai format Chat Completions standar (pesan teks dan gambar base64) dengan mode tanpa berpikir untuk pemeriksaan kata pada gambar uji dan untuk transkripsi, agar jatah keluaran tersedia bagi teks dokumen. Jangan taruh kunci di repositori atau antarmuka web. Sebelum OCR pertama, aplikasi meminta model membaca kode uji acak dari gambar; bila SumoPod menerima gambar tetapi tidak membacanya, OCR mengembalikan kesalahan yang jelas. Respons OCR kosong pada halaman PDF juga tidak ditandai berhasil. Hasil dari penyedia tetap perlu diperiksa terhadap halaman asli.
+Atau jalankan Dockerfile. Untuk OCR gambar dan PDF, atur **`SUMOPOD_API_KEY`** sebagai environment variable di Render. Aplikasi hanya memanggil `https://ai.sumopod.com/v1/chat/completions` dengan model **`deepseek-flash`**; `DEEPSEEK_API_KEY` diabaikan. Permintaan gambar memakai format Chat Completions standar (pesan teks dan gambar base64) dengan mode tanpa berpikir untuk pemeriksaan kata pada gambar uji dan untuk transkripsi, agar jatah keluaran tersedia bagi teks dokumen. Jangan taruh kunci di repositori atau antarmuka web. Sebelum OCR pertama, aplikasi meminta model membaca kata uji acak dari gambar PNG; bila SumoPod menerima gambar tetapi tidak membacanya, OCR mengembalikan kesalahan yang jelas. Respons OCR kosong pada halaman PDF juga tidak ditandai berhasil. Hasil dari penyedia tetap perlu diperiksa terhadap halaman asli.
 
-Menurut [catatan perubahan resmi DeepSeek](https://api-docs.deepseek.com/updates/), ID `deepseek-v4-flash-vision-exp` telah menjadi alias kompatibilitas yang diarahkan ke V4.1 Flash pada API resmi DeepSeek. Aplikasi tetap mengirim ID yang diminta ke SumoPod; perutean aktual di sana bergantung pada SumoPod.
+Menurut [catatan perubahan resmi DeepSeek](https://api-docs.deepseek.com/updates/), ID lama `deepseek-v4-flash-vision-exp` telah pensiun dan hanya menjadi alias sementara ke V4.1 Flash pada API resmi DeepSeek. Aplikasi mengirim ID saat ini `deepseek-flash` ke SumoPod; dukungan dan perutean aktual di sana bergantung pada SumoPod.
 
 Halaman PDF dan gambar diunggah ke penyedia yang dikonfigurasi saat OCR dijalankan. Periksa kebijakan data dan biaya penyedia sebelum memakai dokumen sensitif. Aplikasi tidak menyimpan berkas secara permanen; daftar hasil di browser hilang setelah halaman dimuat ulang. Banyak PDF berarti banyak panggilan model, sedikitnya satu untuk transkripsi tiap halaman dan satu tambahan untuk pemetaan kotak bila koordinat belum tersedia.
 
