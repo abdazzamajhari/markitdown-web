@@ -314,49 +314,57 @@ function renderDetail(item, markdown, engine, record) {
       record.markdown = sections.length
         ? `# Teks halaman yang diekstraksi\n\n${sections.join('\n\n')}${markdown ? `\n\n---\n\n# Markdown dokumen\n\n${markdown}` : ''}`
         : markdown;
-      if (sections.length) {
-        // Keep the page transcription visible, even when the original PDF text is long.
-        pre.textContent = `# Teks halaman yang diekstraksi\n\n${sections.join('\n\n')}${markdown ? `\n\n---\n\n# Markdown dokumen\n\n${markdown}` : ''}`;
-        transcriptHint.textContent = `${transcriptEngine} · ${sections.length} halaman`;
-      } else {
-        const source = pageSource === 'pdf-text' ? 'lapisan teks PDF' : 'OCR gambar';
-        pre.textContent = pageText
-          ? `## Halaman ${page} (${source})\n\n${pageText}\n\n---\n\n## Markdown dokumen\n\n${markdown}`
-          : markdown || '(Tidak ada teks terdeteksi pada halaman ini)';
-      }
+      const source = pageSource === 'deepseek' ? transcriptEngine : 'teks lapisan PDF';
+      pre.textContent = pageText
+        ? `## Halaman ${page} (${source})\n\n${pageText}`
+        : 'Belum ada teks yang terbaca pada halaman ini. Tulisan di gambar menunggu OCR.';
+      transcriptHint.textContent = pageSource === 'deepseek'
+        ? `${transcriptEngine} · halaman ${page}`
+        : 'Teks lapisan PDF · OCR belum lengkap';
       pre.scrollTop = 0;
     };
     const showPage = async (page, refresh = false) => {
-      if (loading) return;
+      if (loading) return false;
       loading = true;
+      const previewOnly = fatalOcrError && !refresh;
       let pendingUrl = null;
+      pageLabel.textContent = `Memuat halaman ${page} dari ${totalPages || "?"}…`;
       previous.disabled = next.disabled = retry.disabled = true;
       if (!scanning) scanAll.disabled = true;
       retry.hidden = true;
       frame.hidden = true;
       previewStatus.hidden = false;
       previewStatus.classList.remove('is-error');
-      previewStatus.textContent = `Memuat halaman ${page} dan kotak OCR…`;
+      previewStatus.textContent = previewOnly
+        ? `Memuat pratinjau halaman ${page} tanpa OCR…`
+        : `Memuat halaman ${page} dan kotak OCR…`;
       scroll.classList.add('is-loading');
       scroll.setAttribute('aria-busy', 'true');
-      regionMessage.textContent = `Memuat halaman ${page} dan kotak OCR…`;
+      regionMessage.textContent = previewStatus.textContent;
+      pre.textContent = `Memuat teks halaman ${page}…`;
+      transcriptHint.textContent = 'Memuat halaman…';
       try {
         let payload = !refresh && pageCache.get(page);
         if (!payload) {
           let response;
           while (true) {
-            const previewOnly = fatalOcrError && !refresh;
-            response = await fetch(`/api/pdf-preview?page=${page}${previewOnly ? '&preview_only=true' : ''}`, {
-              method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
-              body: item.file,
-            });
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), previewOnly ? 45000 : 160000);
+            try {
+              response = await fetch(`/api/pdf-preview?page=${page}${previewOnly ? '&preview_only=true' : ''}`, {
+                method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
+                body: item.file, signal: controller.signal,
+              });
+            } finally { clearTimeout(timer); }
             if (response.status !== 429 || cancelScan) break;
             const seconds = Math.min(60, Math.max(1, Number(response.headers.get('Retry-After')) || 3));
             previewStatus.textContent = `Server sibuk. Melanjutkan halaman ${page} dalam ${seconds} detik…`;
             await new Promise(resolve => setTimeout(resolve, seconds * 1000));
             if (cancelScan) throw new Error('OCR dihentikan');
           }
-          payload = await response.json();
+          const responseText = await response.text();
+          try { payload = JSON.parse(responseText); }
+          catch { throw new Error(`Pratinjau PDF gagal (HTTP ${response.status}). Coba lagi.`); }
           if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
         }
         if (payload.page !== page || !Number.isInteger(payload.total_pages) ||
@@ -392,7 +400,7 @@ function renderDetail(item, markdown, engine, record) {
         updateTranscript(page, pageText, payload.page_source);
         if (payload.ocr_error) {
           lastPreviewError = payload.ocr_error;
-          fatalOcrError = [402, 503, 504].includes(payload.ocr_status);
+          fatalOcrError = [402, 502, 503, 504].includes(payload.ocr_status);
           regionMessage.textContent = `${payload.ocr_error} Gambar PDF tetap ditampilkan; teks di sebelah kanan berasal dari lapisan PDF saja.`;
         } else if (payload.preview_only) {
           regionMessage.textContent = 'Pratinjau PDF tanpa OCR. Setelah akses API pulih, unggah ulang berkas untuk mengekstraksi semua halaman.';
@@ -411,21 +419,21 @@ function renderDetail(item, markdown, engine, record) {
         loaded = true;
         return !payload.warning && !payload.ocr_error && !payload.preview_only;
       } catch (error) {
-        lastPreviewError = error.message;
+        lastPreviewError = error.name === 'AbortError' ? 'Pratinjau halaman melewati batas waktu' : error.message;
         if (pendingUrl) { URL.revokeObjectURL(pendingUrl); objectUrls.delete(pendingUrl); }
         if (previewUrl) { URL.revokeObjectURL(previewUrl); objectUrls.delete(previewUrl); previewUrl = null; }
         image.removeAttribute('src'); image.hidden = true;
         frame.hidden = true;
         layer.replaceChildren();
-        if (totalPages) {
-          currentPage = page;
-          pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
-        }
+        currentPage = page;
+        pageLabel.textContent = totalPages ? `Halaman ${page} dari ${totalPages}` : `Halaman ${page}`;
+        pre.textContent = `Teks halaman ${page} belum tersedia karena pratinjau gagal.`;
+        transcriptHint.textContent = 'OCR belum lengkap';
         previewStatus.hidden = false;
         previewStatus.classList.add('is-error');
         previewStatus.textContent = `Halaman ${page} belum dapat ditampilkan.`;
         retry.hidden = false;
-        regionMessage.textContent = `${error.message}. Gunakan Coba lagi atau lanjut ke halaman berikutnya.`;
+        regionMessage.textContent = `${lastPreviewError}. Gunakan Coba lagi atau lanjut ke halaman berikutnya.`;
         return false;
       } finally {
         loading = false;
