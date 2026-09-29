@@ -233,8 +233,46 @@ def test_vision_probe_reads_simple_word_without_reasoning(monkeypatch):
 
     monkeypatch.setattr(app_main, "request_vision", probe)
     app_main.verify_vision()
-    assert calls == [{"max_tokens": 256, "thinking": False}]
+    assert calls == [{"max_tokens": 256, "thinking": False, "route": "chat"}]
 
+
+
+def test_vision_probe_tries_responses_when_chat_ignores_image(monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    monkeypatch.setattr(app_main.secrets, "choice", lambda choices: "KUCING")
+    monkeypatch.setattr(app_main, "vision_probe_ok", False)
+    monkeypatch.setattr(app_main, "vision_probe_retry_at", 0.0)
+    seen = []
+
+    def probe(image, mime_type, prompt, **kwargs):
+        seen.append((mime_type, kwargs["route"]))
+        return "DOKUMEN" if kwargs["route"] == "chat" else "KUCING"
+
+    monkeypatch.setattr(app_main, "request_vision", probe)
+    app_main.verify_vision()
+    assert seen == [("image/png", "chat"), ("image/png", "responses")]
+    assert app_main.vision_route == "responses"
+    monkeypatch.setattr(app_main, "vision_probe_ok", False)
+    monkeypatch.setattr(app_main, "vision_route", "chat")
+
+
+def test_responses_route_sends_inline_image_and_reads_output(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    seen = []
+
+    def fake_post(url, **kwargs):
+        seen.append((url, kwargs["json"]))
+        return httpx.Response(200, json={
+            "status": "completed",
+            "output": [{"content": [{"type": "output_text", "text": "KUCING"}]}],
+        })
+
+    monkeypatch.setattr(app_main.httpx, "post", fake_post)
+    answer = app_main.request_vision(b"PNG", "image/png",
+                                     "Baca teks", route="responses")
+    assert answer == "KUCING"
+    assert seen[0][0] == "https://ai.sumopod.com/v1/responses"
+    assert seen[0][1]["input"][0]["content"][1]["image_url"].startswith("data:image/png;base64,")
 
 
 def test_pdf_ocr_each_page_and_boxes(client, monkeypatch):
