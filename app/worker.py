@@ -133,8 +133,8 @@ def pdf_pages(data: bytes) -> int:
 
 def render_pdf_page(data: bytes, page: int) -> bytes:
     result = subprocess.run(
-        ["pdftoppm", "-f", str(page), "-l", str(page), "-scale-to", "1600",
-         "-singlefile", "-jpeg", "-"],
+        ["pdftoppm", "-f", str(page), "-l", str(page), "-scale-to", "2200",
+         "-singlefile", "-jpeg", "-jpegopt", "quality=85", "-"],
         input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         check=False, timeout=9,
     )
