@@ -252,6 +252,7 @@ def verify_vision() -> None:
         draw.text((55, 95), code, fill="black", font=ImageFont.load_default(size=72))
         buffer = BytesIO()
         sample.save(buffer, format="PNG")
+    failures = []
     for route in ("chat", "responses"):
         try:
             answer = request_vision(buffer.getvalue(), "image/png",
@@ -260,6 +261,7 @@ def verify_vision() -> None:
         except HTTPException as exc:
             if exc.status_code in {402, 429} or (exc.status_code == 503 and "Kunci" in str(exc.detail)):
                 raise
+            failures.append(str(exc.detail))
             logging.getLogger(__name__).warning("SumoPod vision probe route=%s failed: %s", route, exc.detail)
             continue
         if code in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
@@ -267,10 +269,14 @@ def verify_vision() -> None:
             vision_probe_ok = True
             logging.getLogger(__name__).info("SumoPod vision route verified: %s", route)
             return
+        failures.append("jawaban tidak cocok")
         logging.getLogger(__name__).warning(
             "SumoPod vision probe mismatch: route=%s expected=%s response=%r",
             route, code, answer[:160])
     vision_probe_retry_at = now + 60
+    if len(failures) == 2 and all("terpotong" in reason for reason in failures):
+        raise HTTPException(503, "SumoPod memotong jawaban gambar uji pada kedua rute. "
+                            "Model menghabiskan keluaran sebelum teks OCR tersedia.")
     raise HTTPException(503, "Jawaban SumoPod tidak cocok dengan gambar uji pada kedua rute. "
                         "Periksa apakah model SumoPod benar-benar meneruskan input gambar.")
 
