@@ -41,6 +41,7 @@ SUMOPOD_MODEL = "deepseek-v4.1-flash:netra"
 vision_probe_ok = False
 vision_probe_retry_at = 0.0
 vision_route = "chat"
+vision_minimal = False
 OCR_PROMPT = (
     "Transcribe every visible word in this document image, including tables and text inside pictures. "
     "Preserve spelling, language, numbers and reading order. Format tables as Markdown. "
@@ -158,7 +159,7 @@ def vision_provider() -> tuple[str, str, str]:
     raise HTTPException(503, "Atur SUMOPOD_API_KEY di Render untuk OCR melalui SumoPod")
 
 
-def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 8192, timeout: int = 80, thinking: bool = False, route: str = "chat") -> str:
+def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 8192, timeout: int = 80, thinking: bool = False, route: str = "chat", minimal: bool = False) -> str:
     url, key, provider = vision_provider()
     if len(image) > MAX_BYTES:
         raise HTTPException(413, "Gambar terlalu besar untuk OCR AI")
@@ -186,6 +187,13 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
         }
         if thinking:
             payload["reasoning_effort"] = "low"
+    if minimal:
+        if route == "responses":
+            payload.pop("reasoning", None)
+            payload["input"][0]["content"][1].pop("detail", None)
+        else:
+            payload.pop("thinking", None)
+            payload["messages"][0]["content"][1]["image_url"].pop("detail", None)
     try:
         result = httpx.post(
             url, json=payload,
@@ -238,8 +246,8 @@ def request_vision(image: bytes, mime_type: str, prompt: str, max_tokens: int = 
 
 
 def verify_vision() -> None:
-    """Use only a SumoPod route that actually reads a fresh test image."""
-    global vision_probe_ok, vision_probe_retry_at, vision_route
+    """Choose only a SumoPod payload and route that read a fresh image challenge."""
+    global vision_probe_ok, vision_probe_retry_at, vision_route, vision_minimal
     if vision_probe_ok:
         return
     now = time.monotonic()
@@ -254,42 +262,48 @@ def verify_vision() -> None:
         sample.save(buffer, format="PNG")
     failures = []
     image_missing_reply = False
-    for route in ("chat", "responses"):
-        try:
-            answer = request_vision(buffer.getvalue(), "image/png",
-                                    "Baca kata besar pada gambar. Balas hanya kata itu.",
-                                    max_tokens=4096, thinking=False, route=route)
-        except HTTPException as exc:
-            if exc.status_code in {402, 429} or (exc.status_code == 503 and "Kunci" in str(exc.detail)):
-                raise
-            failures.append(str(exc.detail))
-            logging.getLogger(__name__).warning("SumoPod vision probe route=%s failed: %s", route, exc.detail)
-            continue
-        if code in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
-            vision_route = route
-            vision_probe_ok = True
-            logging.getLogger(__name__).info("SumoPod vision route verified: %s", route)
-            return
-        failures.append("jawaban tidak cocok")
-        if re.search(r"tidak ada gambar|gambar tidak ada|no image|image not provided", answer, re.IGNORECASE):
-            image_missing_reply = True
-        logging.getLogger(__name__).warning(
-            "SumoPod vision probe mismatch: route=%s expected=%s response=%r",
-            route, code, answer[:160])
+    for minimal in (False, True):
+        for route in ("chat", "responses"):
+            try:
+                answer = request_vision(buffer.getvalue(), "image/png",
+                                        "Baca kata besar pada gambar. Balas hanya kata itu.",
+                                        max_tokens=4096, thinking=False, route=route,
+                                        minimal=minimal)
+            except HTTPException as exc:
+                if exc.status_code in {402, 429} or (exc.status_code == 503 and "Kunci" in str(exc.detail)):
+                    raise
+                failures.append(str(exc.detail))
+                logging.getLogger(__name__).warning(
+                    "SumoPod vision probe route=%s minimal=%s failed: %s", route, minimal, exc.detail)
+                continue
+            if code in re.sub(r"[^A-Za-z0-9]", "", answer).upper():
+                vision_route = route
+                vision_minimal = minimal
+                vision_probe_ok = True
+                logging.getLogger(__name__).info(
+                    "SumoPod vision route verified: route=%s minimal=%s", route, minimal)
+                return
+            failures.append("jawaban tidak cocok")
+            if re.search(r"tidak ada gambar|gambar tidak ada|no image|image not provided",
+                         answer, re.IGNORECASE):
+                image_missing_reply = True
+            logging.getLogger(__name__).warning(
+                "SumoPod vision probe mismatch: route=%s minimal=%s expected=%s response=%r",
+                route, minimal, code, answer[:160])
     vision_probe_retry_at = now + 60
     if image_missing_reply:
         raise HTTPException(503, "Rute SumoPod menyatakan gambar tidak tersedia meskipun aplikasi mengirim PNG base64. "
                             "Periksa penerusan input gambar pada SumoPod.")
-    if len(failures) == 2 and all("terpotong" in reason for reason in failures):
+    if failures and all("terpotong" in reason for reason in failures):
         raise HTTPException(503, "SumoPod memotong jawaban gambar uji pada kedua rute. "
                             "Model menghabiskan keluaran sebelum teks OCR tersedia.")
-    raise HTTPException(503, "Jawaban SumoPod tidak cocok dengan gambar uji pada kedua rute. "
-                        "Periksa apakah model SumoPod benar-benar meneruskan input gambar.")
+    raise HTTPException(503, "Jawaban SumoPod tidak cocok dengan gambar uji pada kedua rute, "
+                        "termasuk payload gambar minimal. Periksa dukungan input gambar model pada SumoPod.")
 
 
 def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False, locate: bool = False) -> dict:
     verify_vision()
-    content = request_vision(image, mime_type, OCR_PROMPT, route=vision_route)
+    content = request_vision(image, mime_type, OCR_PROMPT, route=vision_route, minimal=vision_minimal)
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content).strip()
     try:
@@ -307,7 +321,7 @@ def analyze_deepseek(image: bytes, mime_type: str, *, allow_empty: bool = False,
     if locate and markdown and not parsed.get("regions"):
         try:
             region_content = request_vision(image, mime_type, REGIONS_PROMPT,
-                                            max_tokens=4096, timeout=25, route=vision_route).strip()
+                                            max_tokens=4096, timeout=25, route=vision_route, minimal=vision_minimal).strip()
             if region_content.startswith("```"):
                 region_content = re.sub(r"^```(?:json)?\s*|\s*```$", "", region_content).strip()
             region_payload = json.loads(region_content)
