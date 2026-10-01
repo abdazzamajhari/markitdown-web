@@ -195,6 +195,7 @@ function renderDetail(item, markdown, engine, record) {
   let loadRegions;
   let scanPdf;
   let transcriptHint;
+  let reviewStatus;
   if (imageFormats.has(item.extension)) {
     details.open = true;
     const source = makePane('Gambar sumber', 'Kotak: DeepSeek V4.1 Flash · Netra');
@@ -309,7 +310,49 @@ function renderDetail(item, markdown, engine, record) {
     let scanning = false, cancelScan = false;
     const pageCache = new Map();
     const extractedPages = new Map();
+    const languageReviews = new Map();
+    let reviewQueue = Promise.resolve();
     let transcriptEngine = 'Tesseract';
+    const showLanguageReview = (page) => {
+      if (!reviewStatus) return;
+      const review = languageReviews.get(page);
+      if (!review) {
+        reviewStatus.textContent = 'Pemeriksaan bahasa menunggu hasil OCR halaman ini.';
+      } else if (review.status === 'pending') {
+        reviewStatus.textContent = 'Netra sedang memeriksa kewajaran pola bahasa teks OCR…';
+      } else if (review.status === 'error') {
+        reviewStatus.textContent = `Pemeriksaan bahasa belum tersedia: ${review.message}. Teks OCR tetap dapat diunduh.`;
+      } else {
+        const names = review.languages.length ? review.languages.join(', ') : 'tidak teridentifikasi';
+        const assessment = review.assessment === 'wajar' ? 'pola bahasa tampak wajar'
+          : review.assessment === 'perlu_tinjau' ? 'ada bagian yang perlu ditinjau'
+            : 'pola bahasa tidak dapat dinilai';
+        const suspects = review.suspect_spans.length
+          ? ` Kutipan janggal: ${review.suspect_spans.map(x => `“${x}”`).join('; ')}.` : '';
+        reviewStatus.textContent = `Netra (teks saja) · Bahasa: ${names}; ${assessment}.${suspects} Ini indikasi bahasa, bukan pencocokan dengan gambar.`;
+      }
+    };
+    const queueLanguageReview = (page, ocrText) => {
+      if (!ocrText || languageReviews.get(page)?.text === ocrText) return;
+      const entry = {status: 'pending', text: ocrText};
+      languageReviews.set(page, entry);
+      if (currentPage === page) showLanguageReview(page);
+      reviewQueue = reviewQueue.catch(() => {}).then(async () => {
+        if (languageReviews.get(page) !== entry) return;
+        try {
+          const response = await fetch('/api/pdf-language-check', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: ocrText}),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+          if (languageReviews.get(page) === entry) languageReviews.set(page, {...result, status: 'ready', text: ocrText});
+        } catch (error) {
+          if (languageReviews.get(page) === entry) languageReviews.set(page, {status: 'error', text: ocrText, message: error.message});
+        }
+        if (currentPage === page) showLanguageReview(page);
+      });
+    };
     const updateTranscript = (page, pageText, pageSource) => {
       const sections = [...extractedPages].sort(([a], [b]) => a - b)
         .map(([number, text]) => `## Halaman ${number} (${transcriptEngine})\n\n${text}`);
@@ -324,6 +367,7 @@ function renderDetail(item, markdown, engine, record) {
         ? `Tesseract · halaman ${page}`
         : 'Teks lapisan PDF · OCR belum lengkap';
       pre.scrollTop = 0;
+      showLanguageReview(page);
       if (totalPages && extractedPages.size === totalPages && !completed.includes(record)) {
         completed.push(record);
         if (item.row.classList.contains('error')) {
@@ -410,6 +454,7 @@ function renderDetail(item, markdown, engine, record) {
         const pageText = payload.page_text.trim();
         if (payload.page_source === 'tesseract' && pageText) {
           extractedPages.set(page, pageText);
+          queueLanguageReview(page, pageText);
         }
         updateTranscript(page, pageText, payload.page_source);
         if (payload.ocr_error) {
@@ -446,6 +491,7 @@ function renderDetail(item, markdown, engine, record) {
         pageLabel.textContent = totalPages ? `Halaman ${page} dari ${totalPages}` : `Halaman ${page}`;
         pre.textContent = `Teks halaman ${page} belum tersedia karena pratinjau gagal.`;
         transcriptHint.textContent = 'OCR belum lengkap';
+        showLanguageReview(page);
         previewStatus.hidden = false;
         previewStatus.classList.add('is-error');
         previewStatus.textContent = `Halaman ${page} belum dapat ditampilkan.`;
@@ -522,6 +568,13 @@ function renderDetail(item, markdown, engine, record) {
   pre.className = 'transcript';
   pre.textContent = markdown || '(Tidak ada teks terdeteksi)';
   transcript.append(pre);
+  if (item.extension === 'pdf') {
+    reviewStatus = document.createElement('p');
+    reviewStatus.className = 'language-review';
+    reviewStatus.setAttribute('role', 'status');
+    reviewStatus.textContent = 'Pemeriksaan bahasa Netra menunggu hasil OCR. Netra menerima teks saja dan tidak mengubah transkripsi.';
+    transcript.append(reviewStatus);
+  }
   grid.append(transcript);
   const note = document.createElement('p');
   note.className = 'detail-note';

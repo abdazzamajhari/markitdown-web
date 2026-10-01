@@ -9,13 +9,14 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import main as app_main, worker
-from app.main import app, recent_requests, region_requests
+from app.main import app, recent_requests, region_requests, review_requests
 
 
 @pytest.fixture
 def client(monkeypatch):
     recent_requests.clear()
     region_requests.clear()
+    review_requests.clear()
     monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr(app_main, "verify_vision", lambda: None)
@@ -365,3 +366,30 @@ def test_worker_ocr_receives_rendered_image_only():
     text, boxes = worker.ocr_rendered_page(image)
     assert "LAPISAN TERBACA" in text
     assert boxes and all(box["source"] == "tesseract" for box in boxes)
+
+
+def test_pdf_language_review_uses_text_only_and_preserves_ocr(client, monkeypatch):
+    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+    sent = []
+
+    def provider(url, **kwargs):
+        sent.append(kwargs["json"])
+        content = json.dumps({"languages": ["Indonesia"], "assessment": "perlu_tinjau",
+                              "suspect_spans": ["teks janggal", "kutipan rekaan"]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}, "finish_reason": "stop"}]})
+
+    monkeypatch.setattr("app.main.httpx.post", provider)
+    text = "Ini adalah teks janggal pada hasil OCR halaman."
+    response = client.post("/api/pdf-language-check", json={"text": text})
+    assert response.status_code == 200, response.text
+    assert response.json()["suspect_spans"] == ["teks janggal"]
+    assert response.json()["scope"] == "text_only"
+    assert sent[0]["model"] == "deepseek-v4.1-flash:netra"
+    assert text in sent[0]["messages"][0]["content"]
+    assert "image_url" not in json.dumps(sent[0])
+
+    monkeypatch.setattr("app.main.httpx.post", lambda *a, **kw: httpx.Response(503))
+    unavailable = client.post("/api/pdf-language-check", json={"text": text})
+    assert unavailable.status_code == 502
+    pdf = upload(client, "text.pdf", text_layer_pdf_bytes(), "/api/pdf-preview?page=1")
+    assert pdf.status_code == 200 and "LAPISAN TERBACA" in pdf.json()["page_text"]
