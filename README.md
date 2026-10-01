@@ -5,8 +5,8 @@ A web interface for converting documents to Markdown. PDF OCR runs on full-page 
 ## PDF pipeline
 
 1. Validate the PDF and enforce the 30-page limit.
-2. Render **each entire page** to a JPEG with Poppler (`pdftoppm`, longest side 2200 px). Embedded images, text, stamps, and tables are flattened together in that page image.
-3. Run Tesseract (`ind+eng`) on the rendered image for text and word coordinates. The original PDF bytes are never sent to an OCR model. The selectable PDF text layer does not form the Markdown output.
+2. Render **each entire page** to a JPEG with Poppler (`pdftoppm`, longest side 2800 px). Embedded images, text, stamps, and tables are flattened together in that page image. The **OCR diperbesar** button rerenders the selected page at 3200 px and replaces its OCR text when successful.
+3. Run Tesseract (`ind+eng`) once on the rendered image for both text and word coordinates. The original PDF bytes are never sent to an OCR model. The selectable PDF text layer does not form the Markdown output.
 4. Display the page image and OCR text. The browser processes all pages in order and assembles the Markdown download only when every page has been processed. Blank/unreadable pages are reported for review.
 
 This change removes the SumoPod vision probe from the PDF path. It remains in use for separately uploaded PNG/JPEG/WebP images. Tesseract can misread small print, handwriting, stamps, and tables; inspect the Markdown against the page images before relying on sensitive details.

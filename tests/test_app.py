@@ -338,6 +338,10 @@ def test_pdf_ocr_each_page_from_full_page_images(client, monkeypatch):
         assert payload["page_source"] == "tesseract"
         assert word in payload["page_text"]
         assert payload["image"].startswith("data:image/jpeg;base64,")
+    zoomed = upload(client, "scan.pdf", pdf, "/api/pdf-preview?page=2&zoom=true")
+    assert zoomed.status_code == 200
+    assert "DUA" in zoomed.json()["page_text"]
+    assert len(zoomed.json()["image"]) > len(payload["image"])
     assert upload(client, "scan.pdf", pdf, "/api/pdf-preview?page=3").status_code == 400
 
 
@@ -358,4 +362,6 @@ def test_pdf_thirty_pages_allowed_and_thirty_one_skipped(client, monkeypatch):
 def test_worker_ocr_receives_rendered_image_only():
     image = worker.render_pdf_page(text_layer_pdf_bytes(), 1)
     assert image.startswith(b"\xff\xd8\xff")
-    assert "LAPISAN TERBACA" in worker.ocr_rendered_page(image)
+    text, boxes = worker.ocr_rendered_page(image)
+    assert "LAPISAN TERBACA" in text
+    assert boxes and all(box["source"] == "tesseract" for box in boxes)

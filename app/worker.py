@@ -132,32 +132,20 @@ def pdf_pages(data: bytes) -> int:
     return int(match.group(1))
 
 
-def render_pdf_page(data: bytes, page: int) -> bytes:
+def render_pdf_page(data: bytes, page: int, zoom: bool = False) -> bytes:
     result = subprocess.run(
-        ["pdftoppm", "-f", str(page), "-l", str(page), "-scale-to", "2200",
-         "-singlefile", "-jpeg", "-jpegopt", "quality=85", "-"],
+        ["pdftoppm", "-f", str(page), "-l", str(page), "-scale-to", "3200" if zoom else "2800",
+         "-singlefile", "-jpeg", "-jpegopt", "quality=82", "-"],
         input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        check=False, timeout=9,
+        check=False, timeout=15,
     )
     if result.returncode or not result.stdout.startswith(b"\xff\xd8\xff"):
         raise ValueError("PDF page could not be rendered")
     return result.stdout
 
 
-def ocr_rendered_page(jpeg: bytes) -> str:
-    """Transcribe the rasterized full page, never the original PDF bytes."""
-    result = subprocess.run(
-        ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", "3"],
-        input=jpeg, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        check=False, timeout=22,
-    )
-    if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
-        raise ValueError("Page image OCR failed")
-    return result.stdout.decode("utf-8", errors="replace").strip()
-
-
-def ocr_image_regions(jpeg: bytes) -> list[dict]:
-    """Locate recognized words on the rendered page image itself."""
+def ocr_rendered_page(jpeg: bytes) -> tuple[str, list[dict]]:
+    """Read text and word locations in one Tesseract pass over the page image."""
     from PIL import Image
 
     with Image.open(io.BytesIO(jpeg)) as image:
@@ -165,24 +153,36 @@ def ocr_image_regions(jpeg: bytes) -> list[dict]:
     result = subprocess.run(
         ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", "3", "tsv"],
         input=jpeg, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        check=False, timeout=22,
+        check=False, timeout=55,
     )
     if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
-        return []
+        raise ValueError("Page image OCR failed")
+    lines = []
     regions = []
-    for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", errors="replace")), delimiter="\t"):
+    previous_line = previous_paragraph = None
+    for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", errors="replace")),
+                              delimiter="\t", quoting=csv.QUOTE_NONE):
         try:
             word = row["text"].strip()
             x, y, w, h = (int(row[key]) for key in ("left", "top", "width", "height"))
             confidence = float(row["conf"])
+            line = (row["page_num"], row["block_num"], row["par_num"], row["line_num"])
         except (KeyError, TypeError, ValueError):
             continue
-        if word and confidence >= 35 and 0 <= x < width and 0 <= y < height and 0 < w <= width-x and 0 < h <= height-y:
+        if not word:
+            continue
+        paragraph = line[:3]
+        if line != previous_line:
+            if lines:
+                lines.append("\n\n" if paragraph != previous_paragraph else "\n")
+            previous_line, previous_paragraph = line, paragraph
+        elif lines and not lines[-1].endswith(("\n", " ")):
+            lines.append(" ")
+        lines.append(word)
+        if confidence >= 35 and 0 <= x < width and 0 <= y < height and 0 < w <= width-x and 0 < h <= height-y and len(regions) < 600:
             regions.append({"x": x/width, "y": y/height, "w": w/width, "h": h/height,
                             "text": word[:300], "source": "tesseract"})
-        if len(regions) >= 600:
-            break
-    return regions
+    return "".join(lines).strip(), regions
 
 
 def read_pdf_text(data: bytes) -> tuple[int, bytes]:
@@ -193,7 +193,7 @@ def read_pdf_text(data: bytes) -> tuple[int, bytes]:
     return 0, b'{"markdown":"","engine":"pdf-images"}'
 
 
-def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
+def read_pdf_preview(data: bytes, page: int, zoom: bool = False) -> tuple[int, bytes]:
     pages = pdf_pages(data)
     if pages > MAX_PDF_PAGES:
         return 8, b""
@@ -202,11 +202,10 @@ def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
     payload = {"engine": "tesseract", "page": page, "total_pages": pages,
                "image": None, "regions": [], "page_text": "", "page_source": None}
     try:
-        jpeg = render_pdf_page(data, page)
+        jpeg = render_pdf_page(data, page, zoom=zoom)
         payload["image"] = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
-        payload["page_text"] = ocr_rendered_page(jpeg)
+        payload["page_text"], payload["regions"] = ocr_rendered_page(jpeg)
         payload["page_source"] = "tesseract" if payload["page_text"] else None
-        payload["regions"] = ocr_image_regions(jpeg)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         payload["warning"] = "Gambar halaman atau OCR lokal gagal. Coba lagi pada halaman ini."
     return 0, json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -221,7 +220,7 @@ def main() -> int:
     if sys.platform != "win32":
         import resource
 
-        resource.setrlimit(resource.RLIMIT_CPU, (25, 25))
+        resource.setrlimit(resource.RLIMIT_CPU, (75, 75))
         resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
     socket.socket.connect = block_network
     socket.socket.connect_ex = block_network
@@ -238,7 +237,8 @@ def main() -> int:
             if code:
                 return code
         elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2].startswith("pdf-preview:"):
-            code, output = read_pdf_preview(data, int(sys.argv[2].split(":", 1)[1]))
+            parts = sys.argv[2].split(":")
+            code, output = read_pdf_preview(data, int(parts[1]), zoom=len(parts) == 3 and parts[2] == "zoom")
             if code:
                 return code
         else:

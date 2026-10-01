@@ -415,7 +415,7 @@ async def image_regions(request: Request):
 
 
 @app.post("/api/pdf-preview")
-async def pdf_preview(request: Request, page: int = 1, preview_only: bool = False):
+async def pdf_preview(request: Request, page: int = 1, preview_only: bool = False, zoom: bool = False):
     """Render a PDF page and transcribe its image with the configured vision model."""
     _, extension = validate_filename(request.headers.get("x-filename"))
     if extension != ".pdf":
@@ -444,7 +444,8 @@ async def pdf_preview(request: Request, page: int = 1, preview_only: bool = Fals
         if not preview_only:
             region_requests.append(now)
     async with slots:
-        output = await run_in_threadpool(run_worker, bytes(data), extension, f"pdf-preview:{page}")
+        mode = f"pdf-preview:{page}:zoom" if zoom else f"pdf-preview:{page}"
+        output = await run_in_threadpool(run_worker, bytes(data), extension, mode, timeout=85)
         if len(output) > MAX_OUTPUT_BYTES:
             raise HTTPException(413, "Pratinjau PDF terlalu besar")
         try:

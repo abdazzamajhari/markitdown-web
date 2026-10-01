@@ -273,9 +273,11 @@ function renderDetail(item, markdown, engine, record) {
     next.type = 'button'; next.textContent = 'Berikutnya →'; next.disabled = true;
     const retry = document.createElement('button');
     retry.type = 'button'; retry.textContent = 'Coba lagi'; retry.hidden = true;
+    const zoomOcr = document.createElement('button');
+    zoomOcr.type = 'button'; zoomOcr.textContent = 'OCR diperbesar'; zoomOcr.disabled = true;
     const scanAll = document.createElement('button');
     scanAll.type = 'button'; scanAll.textContent = 'Menyiapkan OCR otomatis…'; scanAll.disabled = true;
-    controls.append(previous, pageLabel, next, retry, scanAll);
+    controls.append(previous, pageLabel, next, retry, zoomOcr, scanAll);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
     legend.textContent = '▣ Kotak merah menandai kata yang ditemukan OCR pada gambar halaman. Klik untuk membaca per area.';
@@ -322,14 +324,26 @@ function renderDetail(item, markdown, engine, record) {
         ? `Tesseract · halaman ${page}`
         : 'Teks lapisan PDF · OCR belum lengkap';
       pre.scrollTop = 0;
+      if (totalPages && extractedPages.size === totalPages && !completed.includes(record)) {
+        completed.push(record);
+        if (item.row.classList.contains('error')) {
+          item.row.classList.remove('error');
+          failed = Math.max(0, failed - 1);
+        }
+        item.row.classList.add('done');
+        item.state.textContent = `Selesai · ${transcriptEngine} ${totalPages} halaman`;
+        item.progress.value = 100;
+        single.disabled = copy.disabled = false;
+        updateStatus();
+      }
     };
-    const showPage = async (page, refresh = false) => {
+    const showPage = async (page, refresh = false, zoomForOcr = false) => {
       if (loading) return false;
       loading = true;
       const previewOnly = false;
       let pendingUrl = null;
       pageLabel.textContent = `Memuat halaman ${page} dari ${totalPages || "?"}…`;
-      previous.disabled = next.disabled = retry.disabled = true;
+      previous.disabled = next.disabled = retry.disabled = zoomOcr.disabled = true;
       if (!scanning) scanAll.disabled = true;
       retry.hidden = true;
       frame.hidden = true;
@@ -351,7 +365,7 @@ function renderDetail(item, markdown, engine, record) {
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), previewOnly ? 45000 : 160000);
             try {
-              response = await fetch(`/api/pdf-preview?page=${page}${previewOnly ? '&preview_only=true' : ''}`, {
+              response = await fetch(`/api/pdf-preview?page=${page}${zoomForOcr ? '&zoom=true' : ''}`, {
                 method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
                 body: item.file, signal: controller.signal,
               });
@@ -415,6 +429,9 @@ function renderDetail(item, markdown, engine, record) {
         previewStatus.classList.toggle('is-error', !previewUrl);
         if (!previewUrl) previewStatus.textContent = 'Halaman ini belum dapat ditampilkan.';
         retry.hidden = !payload.warning && !payload.ocr_error;
+        if (zoomForOcr && !payload.warning && !payload.ocr_error) {
+          regionMessage.textContent = 'OCR pada gambar halaman yang diperbesar selesai. Periksa kembali teks kecil dan angka.';
+        }
         if (!payload.warning && !payload.ocr_error) pageCache.set(page, payload);
         loaded = true;
         return !payload.warning && !payload.ocr_error;
@@ -442,15 +459,18 @@ function renderDetail(item, markdown, engine, record) {
         previous.disabled = scanning || !loaded || currentPage <= 1;
         next.disabled = scanning || !loaded || currentPage >= totalPages;
         retry.disabled = scanning;
+        zoomOcr.disabled = scanning || !loaded;
         scanAll.disabled = !loaded || fatalOcrError;
       }
     };
     previous.addEventListener('click', () => void showPage(currentPage - 1));
     next.addEventListener('click', () => void showPage(currentPage + 1));
     retry.addEventListener('click', () => void showPage(currentPage, true));
+    zoomOcr.addEventListener('click', () => void showPage(currentPage, true, true));
     scanPdf = async () => {
       if (scanning) return;
       scanning = true;
+      zoomOcr.disabled = true;
       cancelScan = false;
       const failedPages = [];
       // The first preview also supplies the total page count.
@@ -466,6 +486,7 @@ function renderDetail(item, markdown, engine, record) {
       previous.disabled = !loaded || currentPage <= 1;
       next.disabled = !loaded || currentPage >= totalPages;
       retry.disabled = false;
+      zoomOcr.disabled = !loaded;
       scanAll.textContent = cancelScan ? 'Lanjutkan OCR seluruh halaman' : 'OCR seluruh halaman';
       scanAll.disabled = fatalOcrError;
       const message = cancelScan
@@ -549,7 +570,7 @@ async function processQueue() {
       }
       item.progress.value = 100;
       item.row.classList.add('done');
-      completed.push(record);
+      if (!completed.includes(record)) completed.push(record);
     } catch (error) {
       if (error.status === 413 && error.message.startsWith('Dilewati: PDF')) markSkipped(item, error.message);
       else markError(item, error.message || 'Konversi gagal');
