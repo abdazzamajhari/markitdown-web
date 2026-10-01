@@ -64,20 +64,14 @@ def text_layer_pdf_bytes():
     return bytes(pdf)
 
 
-def test_pdf_text_layer_remains_visible_when_ocr_fails(client, monkeypatch):
-    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
-    monkeypatch.setattr("app.main.httpx.post", lambda *args, **kwargs: httpx.Response(402))
-    pdf = text_layer_pdf_bytes()
-    response = upload(client, "text.pdf", pdf, "/api/pdf-preview?page=1")
+def test_pdf_text_layer_is_ocr_from_rendered_image(client, monkeypatch):
+    monkeypatch.setattr("app.main.httpx.post", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("external OCR called")))
+    response = upload(client, "text.pdf", text_layer_pdf_bytes(), "/api/pdf-preview?page=1")
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["ocr_status"] == 402
-    assert payload["page_source"] == "pdf-text"
+    assert payload["image"].startswith("data:image/jpeg;base64,")
+    assert payload["page_source"] == "tesseract"
     assert "LAPISAN TERBACA" in payload["page_text"]
-    assert any("LAPISAN TERBACA" in region["text"] for region in payload["regions"])
-    preview = upload(client, "text.pdf", pdf, "/api/pdf-preview?page=1&preview_only=true")
-    assert preview.status_code == 200
-    assert preview.json()["page_text"] == payload["page_text"]
 
 
 def fake_provider(monkeypatch, markdown="TEKS GAMBAR", regions=None):
@@ -123,7 +117,7 @@ def test_validates_uploads(client):
     assert upload(client, "wrong.pdf", b"not a pdf").status_code == 415
     assert upload(client, "wrong.png", b"not png").status_code == 415
     assert upload(client, "image.png", image_bytes()).status_code == 503
-    assert upload(client, "scan.pdf", pdf_bytes()).status_code == 503
+    assert upload(client, "scan.pdf", pdf_bytes()).status_code == 200
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as file:
         file.writestr("oops", "not a docx")
@@ -170,71 +164,25 @@ def test_deepseek_plain_text_and_provider_failure(client, monkeypatch):
     assert response.status_code == 502 and "HTTP 400" in response.json()["detail"]
 
 
-def test_payment_failure_keeps_pdf_preview_without_fake_ocr(client, monkeypatch):
-    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
-    calls = []
-
-    def payment_required(url, **kwargs):
-        calls.append(url)
-        return httpx.Response(402)
-
-    monkeypatch.setattr("app.main.httpx.post", payment_required)
-    pdf = pdf_bytes(2)
-    response = upload(client, "scan.pdf", pdf, "/api/pdf-preview?page=1")
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["image"].startswith("data:image/jpeg;base64,")
-    assert payload["total_pages"] == 2 and payload["page_text"] == ""
-    assert payload["page_source"] is None and payload["ocr_status"] == 402
-    assert "SumoPod menolak OCR" in payload["ocr_error"]
-    assert len(calls) == 1
-
-    second = upload(client, "scan.pdf", pdf, "/api/pdf-preview?page=2&preview_only=true")
-    assert second.status_code == 200
-    assert second.json()["image"].startswith("data:image/jpeg;base64,")
-    assert second.json()["preview_only"] is True
-    assert len(calls) == 1
-
-    image = upload(client, "gambar.png", image_bytes())
-    assert image.status_code == 402 and "pembayaran atau kredit" in image.json()["detail"]
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "ignored-key")
-    again = upload(client, "gambar.png", image_bytes())
-    assert again.status_code == 402 and "SumoPod menolak OCR" in again.json()["detail"]
-    assert all(url == "https://ai.sumopod.com/v1/chat/completions" for url in calls)
+def test_pdf_ocr_does_not_call_sumopod(client, monkeypatch):
+    monkeypatch.setattr("app.main.httpx.post", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("external OCR called")))
+    response = upload(client, "text.pdf", text_layer_pdf_bytes(), "/api/pdf-preview?page=1")
+    assert response.status_code == 200
+    assert response.json()["page_source"] == "tesseract"
 
 
-def test_sumopod_timeout_preserves_preview_and_identifies_timeout(client, monkeypatch):
-    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
-    monkeypatch.setattr("app.main.httpx.post",
-                        lambda *args, **kwargs: (_ for _ in ()).throw(httpx.ReadTimeout("slow")))
+def test_blank_pdf_page_reports_ocr_absence(client):
     response = upload(client, "scan.pdf", pdf_bytes(), "/api/pdf-preview?page=1")
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["image"].startswith("data:image/jpeg;base64,")
-    assert payload["ocr_status"] == 504
-    assert "80 detik" in payload["ocr_error"]
+    assert response.json()["image"].startswith("data:image/jpeg;base64,")
+    assert response.json()["ocr_status"] == 422
 
 
-
-def test_pdf_transcription_survives_box_mapping_timeout(client, monkeypatch):
-    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
-    calls = []
-
-    def provider(url, **kwargs):
-        calls.append(kwargs["json"]["messages"][0]["content"][0]["text"])
-        if len(calls) == 1:
-            return httpx.Response(200, json={"choices": [{"message": {"content": "HALAMAN OCR"}}]})
-        raise httpx.ReadTimeout("coordinate mapping slow")
-
-    monkeypatch.setattr("app.main.httpx.post", provider)
-    response = upload(client, "scan.pdf", pdf_bytes(), "/api/pdf-preview?page=1")
+def test_pdf_ocr_is_independent_of_box_mapping(client, monkeypatch):
+    monkeypatch.setattr("app.main.httpx.post", lambda *a, **kw: (_ for _ in ()).throw(httpx.ReadTimeout("slow")))
+    response = upload(client, "text.pdf", text_layer_pdf_bytes(), "/api/pdf-preview?page=1")
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["page_text"] == "HALAMAN OCR"
-    assert payload["page_source"] == "deepseek"
-    assert "ocr_error" not in payload
-    assert len(calls) == 2
-
+    assert response.json()["page_source"] == "tesseract"
 
 
 def test_empty_provider_result_is_not_reported_as_success(client, monkeypatch):
@@ -243,8 +191,7 @@ def test_empty_provider_result_is_not_reported_as_success(client, monkeypatch):
     response = upload(client, "gambar.png", image_bytes())
     assert response.status_code == 502 and "OCR kosong" in response.json()["detail"]
     preview = upload(client, "scan.pdf", pdf_bytes(), "/api/pdf-preview?page=1")
-    assert preview.status_code == 200 and preview.json()["ocr_status"] == 502
-    assert "OCR kosong" in preview.json()["ocr_error"]
+    assert preview.status_code == 200 and preview.json()["ocr_status"] == 422
     assert preview.json()["image"].startswith("data:image/jpeg;base64,")
 
 
@@ -372,24 +319,25 @@ def test_minimal_payload_keeps_image_and_omits_optional_controls(client, monkeyp
     assert responses["input"][0]["content"][1]["image_url"].startswith("data:image/png;base64,")
 
 
-def test_pdf_ocr_each_page_and_boxes(client, monkeypatch):
-    monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
-    sent = fake_provider(monkeypatch, regions=[
-        {"x": .2, "y": .3, "w": .4, "h": .08, "text": "TEKS GAMBAR"},
-    ])
-    pdf = pdf_bytes(2)
-    initial = upload(client, "scan.pdf", pdf)
-    assert initial.status_code == 200, initial.text
-    assert not sent
-    for page in (1, 2):
+def test_pdf_ocr_each_page_from_full_page_images(client, monkeypatch):
+    from PIL import ImageDraw, ImageFont
+    monkeypatch.setattr("app.main.httpx.post", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("external OCR called")))
+    images = []
+    for word in ("LAMPIRAN SATU", "LAMPIRAN DUA"):
+        image = Image.new("RGB", (850, 1100), "white")
+        ImageDraw.Draw(image).text((100, 130), word, fill="black", font=ImageFont.load_default(size=48))
+        images.append(image)
+    buffer = io.BytesIO()
+    images[0].save(buffer, format="PDF", save_all=True, append_images=images[1:])
+    pdf = buffer.getvalue()
+    assert upload(client, "scan.pdf", pdf).status_code == 200
+    for page, word in ((1, "SATU"), (2, "DUA")):
         response = upload(client, "scan.pdf", pdf, f"/api/pdf-preview?page={page}")
         assert response.status_code == 200, response.text
         payload = response.json()
-        assert payload["page"] == page and payload["total_pages"] == 2
-        assert payload["page_text"] == "TEKS GAMBAR" and payload["page_source"] == "deepseek"
-        assert payload["regions"][0]["source"] == "deepseek"
+        assert payload["page_source"] == "tesseract"
+        assert word in payload["page_text"]
         assert payload["image"].startswith("data:image/jpeg;base64,")
-    assert len(sent) == 2
     assert upload(client, "scan.pdf", pdf, "/api/pdf-preview?page=3").status_code == 400
 
 
@@ -407,7 +355,7 @@ def test_pdf_thirty_pages_allowed_and_thirty_one_skipped(client, monkeypatch):
     assert upload(client, "next.txt", b"berikutnya").status_code == 200
 
 
-def test_worker_has_no_tesseract_dependency():
-    import inspect
-    assert "tesseract" not in inspect.getsource(worker).lower()
-    assert worker.prepare_image(image_bytes(), ".png")[0] == 0
+def test_worker_ocr_receives_rendered_image_only():
+    image = worker.render_pdf_page(text_layer_pdf_bytes(), 1)
+    assert image.startswith(b"\xff\xd8\xff")
+    assert "LAPISAN TERBACA" in worker.ocr_rendered_page(image)

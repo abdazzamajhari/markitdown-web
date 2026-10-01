@@ -143,7 +143,7 @@ def convert_pdf(data: bytes) -> tuple[str, str]:
     try:
         payload = json.loads(output)
         markdown, engine = payload["markdown"], payload["engine"]
-        if not isinstance(markdown, str) or engine != "markitdown":
+        if not isinstance(markdown, str) or engine != "pdf-images":
             raise ValueError
     except (KeyError, TypeError, ValueError):
         raise HTTPException(502, "Hasil konversi PDF tidak valid") from None
@@ -431,8 +431,6 @@ async def pdf_preview(request: Request, page: int = 1, preview_only: bool = Fals
             raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
         data.extend(chunk)
     validate_content(data, extension)
-    if not preview_only:
-        vision_provider()
     async with quota_lock:
         if not preview_only:
             now = time.monotonic()
@@ -453,24 +451,9 @@ async def pdf_preview(request: Request, page: int = 1, preview_only: bool = Fals
             payload = json.loads(output)
         except (ValueError, UnicodeDecodeError):
             raise HTTPException(502, "Pratinjau PDF tidak valid") from None
-        if payload.get("image") and not preview_only:
-            try:
-                jpeg = base64.b64decode(payload["image"].split(",", 1)[1], validate=True)
-            except (ValueError, IndexError):
-                raise HTTPException(502, "Gambar halaman PDF tidak valid") from None
-            try:
-                analysis = await run_in_threadpool(analyze_deepseek, jpeg, "image/jpeg", locate=True)
-            except HTTPException as exc:
-                if exc.status_code not in {402, 502, 503, 504}:
-                    raise
-                payload["ocr_error"] = exc.detail
-                payload["ocr_status"] = exc.status_code
-            else:
-                from app.worker import merge_regions
-                payload["page_text"] = analysis["markdown"]
-                payload["regions"] = merge_regions(payload["regions"], analysis["regions"])
-                payload["page_source"] = "deepseek"
-                payload["engine"] = SUMOPOD_MODEL
+        if payload.get("image") and not payload.get("page_text"):
+            payload["ocr_error"] = "OCR gambar halaman ini tidak menemukan teks. Periksa gambar dan coba lagi."
+            payload["ocr_status"] = 422
         if preview_only:
             payload["preview_only"] = True
         if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT_BYTES:
@@ -490,7 +473,7 @@ async def convert_file(request: Request):
             raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
         data.extend(chunk)
     validate_content(data, extension)
-    if extension in IMAGE_FORMATS or extension == ".pdf":
+    if extension in IMAGE_FORMATS:
         vision_provider()
     # Bound simultaneous traffic; the browser waits and retries a temporary 429.
     async with quota_lock:

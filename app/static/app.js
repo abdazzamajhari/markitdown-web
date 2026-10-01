@@ -155,7 +155,7 @@ function showRegions(layer, regions, message) {
     box.style.width = `${Math.max(0, Math.min(100, region.w * 100))}%`;
     box.style.height = `${Math.max(0, Math.min(100, region.h * 100))}%`;
     box.title = region.text;
-    box.setAttribute('aria-label', `${region.source === 'pdf-text' ? 'Teks lapisan PDF' : 'Teks DeepSeek'}: ${region.text}`);
+    box.setAttribute('aria-label', `${region.source === 'tesseract' ? 'Teks OCR gambar' : 'Teks DeepSeek'}: ${region.text}`);
     box.addEventListener('click', () => {
       layer.querySelector('.selected')?.classList.remove('selected');
       box.classList.add('selected');
@@ -164,8 +164,8 @@ function showRegions(layer, regions, message) {
     layer.append(box);
   }
   message.textContent = layer.childElementCount
-    ? `${layer.childElementCount} area teks ditandai dari ${regions.some(region => region.source === 'pdf-text') ? 'lapisan PDF dan DeepSeek' : 'DeepSeek'}. Klik kotak untuk membaca per area.`
-    : 'DeepSeek tidak memberikan koordinat kotak untuk halaman ini. Hasil teks tetap tersedia di sebelahnya.';
+    ? `${layer.childElementCount} area teks ditandai. Klik kotak untuk membaca per area.`
+    : 'Koordinat kotak belum tersedia untuk halaman ini. Periksa hasil teks di sebelahnya.';
 }
 function renderDetail(item, markdown, engine, record) {
   const actions = document.createElement('div');
@@ -253,7 +253,7 @@ function renderDetail(item, markdown, engine, record) {
     details.open = true;
     summary.textContent = 'Halaman PDF dan hasil OCR · klik untuk sembunyikan';
     single.disabled = copy.disabled = true;
-    const source = makePane('Halaman PDF dan kotak teks', 'Lapisan PDF + DeepSeek');
+    const source = makePane('Gambar halaman PDF dan kotak teks', 'Gambar penuh + OCR lokal');
     const zoom = document.createElement('button');
     zoom.type = 'button';
     zoom.className = 'zoom-button';
@@ -278,7 +278,7 @@ function renderDetail(item, markdown, engine, record) {
     controls.append(previous, pageLabel, next, retry, scanAll);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
-    legend.textContent = '▣ Kotak merah menandai teks lapisan PDF dan area yang dipetakan DeepSeek. Klik untuk membaca per area.';
+    legend.textContent = '▣ Kotak merah menandai kata yang ditemukan OCR pada gambar halaman. Klik untuk membaca per area.';
     const scroll = document.createElement('div');
     scroll.className = 'image-scroll pdf-preview-scroll is-loading';
     scroll.setAttribute('aria-busy', 'true');
@@ -307,26 +307,26 @@ function renderDetail(item, markdown, engine, record) {
     let scanning = false, cancelScan = false;
     const pageCache = new Map();
     const extractedPages = new Map();
-    let transcriptEngine = 'DeepSeek V4.1 Flash · Netra';
+    let transcriptEngine = 'Tesseract';
     const updateTranscript = (page, pageText, pageSource) => {
       const sections = [...extractedPages].sort(([a], [b]) => a - b)
         .map(([number, text]) => `## Halaman ${number} (${transcriptEngine})\n\n${text}`);
       record.markdown = sections.length
-        ? `# Teks halaman yang diekstraksi\n\n${sections.join('\n\n')}${markdown ? `\n\n---\n\n# Markdown dokumen\n\n${markdown}` : ''}`
-        : markdown;
-      const source = pageSource === 'deepseek' ? transcriptEngine : 'teks lapisan PDF';
+        ? `# Teks halaman yang diekstraksi\n\n${sections.join('\n\n')}`
+        : '';
+      const source = pageSource === 'tesseract' ? 'OCR gambar halaman' : 'teks lapisan PDF';
       pre.textContent = pageText
         ? `## Halaman ${page} (${source})\n\n${pageText}`
         : 'Belum ada teks yang terbaca pada halaman ini. Tulisan di gambar menunggu OCR.';
-      transcriptHint.textContent = pageSource === 'deepseek'
-        ? `${transcriptEngine} · halaman ${page}`
+      transcriptHint.textContent = pageSource === 'tesseract'
+        ? `Tesseract · halaman ${page}`
         : 'Teks lapisan PDF · OCR belum lengkap';
       pre.scrollTop = 0;
     };
     const showPage = async (page, refresh = false) => {
       if (loading) return false;
       loading = true;
-      const previewOnly = fatalOcrError && !refresh;
+      const previewOnly = false;
       let pendingUrl = null;
       pageLabel.textContent = `Memuat halaman ${page} dari ${totalPages || "?"}…`;
       previous.disabled = next.disabled = retry.disabled = true;
@@ -394,16 +394,16 @@ function renderDetail(item, markdown, engine, record) {
         pageLabel.textContent = `Halaman ${currentPage} dari ${totalPages}`;
         showRegions(layer, payload.regions, regionMessage);
         const pageText = payload.page_text.trim();
-        if (payload.page_source === 'deepseek' && pageText) {
+        if (payload.page_source === 'tesseract' && pageText) {
           extractedPages.set(page, pageText);
         }
         updateTranscript(page, pageText, payload.page_source);
         if (payload.ocr_error) {
           lastPreviewError = payload.ocr_error;
           fatalOcrError = [402, 502, 503, 504].includes(payload.ocr_status);
-          regionMessage.textContent = `${payload.ocr_error} Gambar PDF tetap ditampilkan; teks di sebelah kanan berasal dari lapisan PDF saja.`;
+          regionMessage.textContent = payload.ocr_error;
         } else if (payload.preview_only) {
-          regionMessage.textContent = 'Halaman PDF sudah dirender menjadi gambar penuh. OCR SumoPod belum berhasil membaca gambar uji; tulisan di dalam gambar belum terekstraksi.';
+          regionMessage.textContent = 'Halaman PDF sudah dirender menjadi gambar penuh dan diproses dengan OCR lokal.';
         } else if (payload.warning) {
           regionMessage.textContent = payload.warning;
         } else {
@@ -414,10 +414,10 @@ function renderDetail(item, markdown, engine, record) {
         previewStatus.hidden = !!previewUrl;
         previewStatus.classList.toggle('is-error', !previewUrl);
         if (!previewUrl) previewStatus.textContent = 'Halaman ini belum dapat ditampilkan.';
-        retry.hidden = !payload.warning && !payload.ocr_error && !payload.preview_only;
-        if (!payload.warning && !payload.ocr_error && !payload.preview_only) pageCache.set(page, payload);
+        retry.hidden = !payload.warning && !payload.ocr_error;
+        if (!payload.warning && !payload.ocr_error) pageCache.set(page, payload);
         loaded = true;
-        return !payload.warning && !payload.ocr_error && !payload.preview_only;
+        return !payload.warning && !payload.ocr_error;
       } catch (error) {
         lastPreviewError = error.name === 'AbortError' ? 'Pratinjau halaman melewati batas waktu' : error.message;
         if (pendingUrl) { URL.revokeObjectURL(pendingUrl); objectUrls.delete(pendingUrl); }
@@ -472,16 +472,16 @@ function renderDetail(item, markdown, engine, record) {
         ? 'OCR dihentikan. Teks halaman yang sudah diproses tersedia untuk diunduh.'
         : failedPages.length
           ? fatalOcrError
-            ? 'OCR dihentikan karena SumoPod belum mengembalikan hasil yang dapat dipakai. Pratinjau PDF tetap tersedia. Periksa pesan kesalahan, lalu unggah ulang setelah layanan OCR siap.'
+            ? 'OCR halaman gagal. Periksa pesan kesalahan dan coba lagi.'
             : `OCR selesai; halaman ${failedPages.join(', ')} belum terbaca. Buka halaman tersebut dan klik Coba lagi.`
-          : 'OCR selesai. Teks gambar yang ditemukan telah ditambahkan ke unduhan Markdown.';
+          : 'OCR selesai. Teks dari gambar setiap halaman telah ditambahkan ke unduhan Markdown.';
       regionMessage.textContent = message;
       item.state.textContent = cancelScan || failedPages.length
         ? `Selesai sebagian · ${message}` : `Selesai · ${transcriptEngine} ${totalPages} halaman`;
       single.disabled = copy.disabled = failedPages.length > 0;
       if (failedPages.length) {
-        transcriptHint.textContent = 'Teks lapisan PDF · OCR belum lengkap';
-        note.textContent = 'Teks di panel ini berasal dari lapisan PDF yang dapat dipilih. Tulisan di dalam gambar dan lampiran belum diekstraksi. Unduhan dinonaktifkan sampai OCR seluruh berkas berhasil.';
+        transcriptHint.textContent = 'OCR gambar · belum lengkap';
+        note.textContent = 'Halaman yang gagal OCR perlu diproses ulang sebelum unduhan lengkap tersedia.';
       }
       item.progress.value = 100;
       return {failedPages, cancelled: cancelScan, error: lastPreviewError};
@@ -494,7 +494,7 @@ function renderDetail(item, markdown, engine, record) {
     });
     loadRegions = async () => { if (!loaded) await showPage(1); };
   }
-  const engineLabel = engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : item.extension === 'pdf' ? 'MarkItDown · DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
+  const engineLabel = item.extension === 'pdf' ? 'OCR gambar halaman · Tesseract' : engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
   const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
   transcriptHint = transcript.querySelector('.detail-pane-head small');
   const pre = document.createElement('pre');
@@ -507,7 +507,7 @@ function renderDetail(item, markdown, engine, record) {
   note.textContent = imageFormats.has(item.extension)
     ? 'Transkripsi dan lokasi kotak berasal dari DeepSeek V4.1 Flash · Netra. Kotak dapat tidak lengkap bila model tidak memberikan koordinat.'
     : item.extension === 'pdf'
-      ? 'Halaman PDF ditranskripsikan otomatis oleh DeepSeek V4.1 Flash · Netra. Kotak berasal dari lapisan teks PDF dan koordinat DeepSeek. Hasilnya tampil di awal panel kanan dan masuk ke unduhan Markdown.'
+      ? 'Setiap halaman PDF dirender menjadi gambar penuh lalu dibaca oleh OCR lokal. Periksa kembali nama, angka, dan tabel sebelum menggunakan hasilnya.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
   details.append(summary, grid, note);
   if (loadRegions && item.extension !== 'pdf') {
@@ -597,8 +597,6 @@ window.addEventListener('pagehide', () => { for (const url of objectUrls) URL.re
 fetch('/api/capabilities', {cache: 'no-store'})
   .then((response) => response.json())
   .then(({image_ocr, image_ocr_model}) => {
-    ocrMode.textContent = image_ocr !== 'unavailable'
-      ? `OCR PDF dan gambar: ${image_ocr_model} melalui ${image_ocr === 'deepseek' ? 'API resmi DeepSeek' : 'SumoPod'}. PDF maksimal 30 halaman.`
-      : 'OCR tidak tersedia: atur DEEPSEEK_API_KEY atau SUMOPOD_API_KEY.';
+    ocrMode.textContent = `PDF: gambar penuh per halaman dibaca dengan Tesseract lokal (maksimal 30 halaman). Gambar terpisah: ${image_ocr === 'unavailable' ? 'perlu SUMOPOD_API_KEY' : image_ocr_model + ' melalui SumoPod'}.`;
   })
   .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });

@@ -2,6 +2,7 @@
 
 import io
 import base64
+import csv
 import json
 import re
 import socket
@@ -143,18 +144,53 @@ def render_pdf_page(data: bytes, page: int) -> bytes:
     return result.stdout
 
 
+def ocr_rendered_page(jpeg: bytes) -> str:
+    """Transcribe the rasterized full page, never the original PDF bytes."""
+    result = subprocess.run(
+        ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", "3"],
+        input=jpeg, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        check=False, timeout=22,
+    )
+    if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
+        raise ValueError("Page image OCR failed")
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def ocr_image_regions(jpeg: bytes) -> list[dict]:
+    """Locate recognized words on the rendered page image itself."""
+    from PIL import Image
+
+    with Image.open(io.BytesIO(jpeg)) as image:
+        width, height = image.size
+    result = subprocess.run(
+        ["tesseract", "stdin", "stdout", "-l", "ind+eng", "--psm", "3", "tsv"],
+        input=jpeg, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        check=False, timeout=22,
+    )
+    if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
+        return []
+    regions = []
+    for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", errors="replace")), delimiter="\t"):
+        try:
+            word = row["text"].strip()
+            x, y, w, h = (int(row[key]) for key in ("left", "top", "width", "height"))
+            confidence = float(row["conf"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if word and confidence >= 35 and 0 <= x < width and 0 <= y < height and 0 < w <= width-x and 0 < h <= height-y:
+            regions.append({"x": x/width, "y": y/height, "w": w/width, "h": h/height,
+                            "text": word[:300], "source": "tesseract"})
+        if len(regions) >= 600:
+            break
+    return regions
+
+
 def read_pdf_text(data: bytes) -> tuple[int, bytes]:
-    # PDF image pages are transcribed by the single configured vision model.
+    # Only validate the PDF here. The browser transcribes full-page raster images.
     pages = pdf_pages(data)
     if pages > MAX_PDF_PAGES:
         return 8, b""
-    from markitdown import MarkItDown
-    try:
-        result = MarkItDown(enable_plugins=False).convert_stream(io.BytesIO(data), file_extension=".pdf")
-        markdown = (result.markdown or "").strip()
-    except Exception:
-        markdown = ""
-    return 0, json.dumps({"markdown": markdown, "engine": "markitdown"}, ensure_ascii=False).encode("utf-8")
+    return 0, b'{"markdown":"","engine":"pdf-images"}'
 
 
 def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
@@ -163,15 +199,16 @@ def read_pdf_preview(data: bytes, page: int) -> tuple[int, bytes]:
         return 8, b""
     if page < 1 or page > pages:
         return 7, b""
-    page_text = read_pdf_page_text(data, page)
-    payload = {"engine": "pdf-text", "page": page, "total_pages": pages,
-               "image": None, "regions": read_pdf_text_regions(data, page),
-               "page_text": page_text, "page_source": "pdf-text" if page_text else None}
+    payload = {"engine": "tesseract", "page": page, "total_pages": pages,
+               "image": None, "regions": [], "page_text": "", "page_source": None}
     try:
         jpeg = render_pdf_page(data, page)
         payload["image"] = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
+        payload["page_text"] = ocr_rendered_page(jpeg)
+        payload["page_source"] = "tesseract" if payload["page_text"] else None
+        payload["regions"] = ocr_image_regions(jpeg)
     except (OSError, ValueError, subprocess.TimeoutExpired):
-        payload["warning"] = "Halaman ini tidak dapat dirender. Coba lagi atau lanjut ke halaman berikutnya."
+        payload["warning"] = "Gambar halaman atau OCR lokal gagal. Coba lagi pada halaman ini."
     return 0, json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
