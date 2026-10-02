@@ -15,3 +15,4 @@ button{font:inherit}button:focus-visible,a:focus-visible,summary:focus-visible{o
 .pdf-preview-scroll{position:relative;min-height:260px;background:#f1f7f3}.pdf-preview-status{min-height:260px;padding:24px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;text-align:center;color:#42675e;font-size:13px;font-weight:700;line-height:1.5}.pdf-preview-status::before{content:"";width:30px;height:30px;border-radius:50%;border:3px solid #c8e4d8;border-top-color:#138679;animation:pdf-spin .8s linear infinite}.pdf-preview-status.is-error::before{display:none}@keyframes pdf-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.pdf-preview-status::before{animation:none}}
 
 .language-review{border-top:1px solid #e1ebe6;margin:0;padding:12px 15px;font-size:12px;line-height:1.55;color:#345c55;overflow-wrap:anywhere}
+.transcript-toggle{padding:5px 8px;flex-shrink:0;font-size:11px}.detail-pane-head small{margin-left:auto}

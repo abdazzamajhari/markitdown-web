@@ -75,6 +75,17 @@ def test_pdf_text_layer_is_ocr_from_rendered_image(client, monkeypatch):
     assert "LAPISAN TERBACA" in payload["page_text"]
 
 
+def test_pdf_ocr_orders_table_rows_by_image_position():
+    # Tesseract can report a whole right-hand column before the left one.
+    words = [
+        {"line": (1, 2, 1, 1), "x": 400, "y": 105, "w": 45, "h": 18, "text": "Second"},
+        {"line": (1, 2, 1, 2), "x": 400, "y": 145, "w": 40, "h": 18, "text": "Fourth"},
+        {"line": (1, 1, 1, 1), "x": 100, "y": 105, "w": 35, "h": 18, "text": "First"},
+        {"line": (1, 1, 1, 2), "x": 100, "y": 145, "w": 35, "h": 18, "text": "Third"},
+    ]
+    assert worker.order_ocr_words(words) == "First | Second\nThird | Fourth"
+
+
 def fake_provider(monkeypatch, markdown="TEKS GAMBAR", regions=None):
     requests = []
 

@@ -195,6 +195,8 @@ function renderDetail(item, markdown, engine, record) {
   let loadRegions;
   let scanPdf;
   let transcriptHint;
+  let transcriptToggle;
+  let toggleTranscript;
   let reviewStatus;
   if (imageFormats.has(item.extension)) {
     details.open = true;
@@ -313,6 +315,29 @@ function renderDetail(item, markdown, engine, record) {
     const languageReviews = new Map();
     let reviewQueue = Promise.resolve();
     let transcriptEngine = 'Tesseract';
+    let transcriptView = 'page';
+    const displayTranscript = (page, pageText, pageSource) => {
+      if (transcriptView === 'all' && record.markdown) {
+        pre.textContent = record.markdown;
+        transcriptHint.textContent = `Tesseract · seluruh dokumen (${extractedPages.size}/${totalPages} halaman)`;
+        transcriptToggle.textContent = 'Lihat halaman ini';
+      } else {
+        const source = pageSource === 'tesseract' ? 'OCR gambar halaman' : 'teks lapisan PDF';
+        pre.textContent = pageText
+          ? `## Halaman ${page} (${source})\n\n${pageText}`
+          : 'Belum ada teks yang terbaca pada halaman ini. Tulisan di gambar menunggu OCR.';
+        transcriptHint.textContent = pageSource === 'tesseract'
+          ? `Tesseract · halaman ${page}` : 'OCR halaman belum lengkap';
+        transcriptToggle.textContent = 'Lihat seluruh teks';
+      }
+      transcriptToggle.disabled = !record.markdown;
+      pre.scrollTop = 0;
+    };
+    toggleTranscript = () => {
+      transcriptView = transcriptView === 'all' ? 'page' : 'all';
+      const payload = pageCache.get(currentPage);
+      displayTranscript(currentPage, payload?.page_text?.trim() || '', payload?.page_source);
+    };
     const showLanguageReview = (page) => {
       if (!reviewStatus) return;
       const review = languageReviews.get(page);
@@ -359,14 +384,7 @@ function renderDetail(item, markdown, engine, record) {
       record.markdown = sections.length
         ? `# Teks halaman yang diekstraksi\n\n${sections.join('\n\n')}`
         : '';
-      const source = pageSource === 'tesseract' ? 'OCR gambar halaman' : 'teks lapisan PDF';
-      pre.textContent = pageText
-        ? `## Halaman ${page} (${source})\n\n${pageText}`
-        : 'Belum ada teks yang terbaca pada halaman ini. Tulisan di gambar menunggu OCR.';
-      transcriptHint.textContent = pageSource === 'tesseract'
-        ? `Tesseract · halaman ${page}`
-        : 'Teks lapisan PDF · OCR belum lengkap';
-      pre.scrollTop = 0;
+      displayTranscript(page, pageText, pageSource);
       showLanguageReview(page);
       if (totalPages && extractedPages.size === totalPages && !completed.includes(record)) {
         completed.push(record);
@@ -399,8 +417,10 @@ function renderDetail(item, markdown, engine, record) {
       scroll.classList.add('is-loading');
       scroll.setAttribute('aria-busy', 'true');
       regionMessage.textContent = previewStatus.textContent;
-      pre.textContent = `Memuat teks halaman ${page}…`;
-      transcriptHint.textContent = 'Memuat halaman…';
+      if (transcriptView === 'page') {
+        pre.textContent = `Memuat teks halaman ${page}…`;
+        transcriptHint.textContent = 'Memuat halaman…';
+      }
       try {
         let payload = !refresh && pageCache.get(page);
         if (!payload) {
@@ -489,8 +509,10 @@ function renderDetail(item, markdown, engine, record) {
         layer.replaceChildren();
         currentPage = page;
         pageLabel.textContent = totalPages ? `Halaman ${page} dari ${totalPages}` : `Halaman ${page}`;
-        pre.textContent = `Teks halaman ${page} belum tersedia karena pratinjau gagal.`;
-        transcriptHint.textContent = 'OCR belum lengkap';
+        if (transcriptView === 'page') {
+          pre.textContent = `Teks halaman ${page} belum tersedia karena pratinjau gagal.`;
+          transcriptHint.textContent = 'OCR belum lengkap';
+        }
         showLanguageReview(page);
         previewStatus.hidden = false;
         previewStatus.classList.add('is-error');
@@ -509,10 +531,10 @@ function renderDetail(item, markdown, engine, record) {
         scanAll.disabled = !loaded || fatalOcrError;
       }
     };
-    previous.addEventListener('click', () => void showPage(currentPage - 1));
-    next.addEventListener('click', () => void showPage(currentPage + 1));
-    retry.addEventListener('click', () => void showPage(currentPage, true));
-    zoomOcr.addEventListener('click', () => void showPage(currentPage, true, true));
+    previous.addEventListener('click', () => { transcriptView = 'page'; void showPage(currentPage - 1); });
+    next.addEventListener('click', () => { transcriptView = 'page'; void showPage(currentPage + 1); });
+    retry.addEventListener('click', () => { transcriptView = 'page'; void showPage(currentPage, true); });
+    zoomOcr.addEventListener('click', () => { transcriptView = 'page'; void showPage(currentPage, true, true); });
     scanPdf = async () => {
       if (scanning) return;
       scanning = true;
@@ -535,6 +557,11 @@ function renderDetail(item, markdown, engine, record) {
       zoomOcr.disabled = !loaded;
       scanAll.textContent = cancelScan ? 'Lanjutkan OCR seluruh halaman' : 'OCR seluruh halaman';
       scanAll.disabled = fatalOcrError;
+      if (!cancelScan && !failedPages.length && record.markdown) {
+        transcriptView = 'all';
+        if (currentPage !== 1) await showPage(1);
+        displayTranscript(currentPage, extractedPages.get(currentPage) || '', 'tesseract');
+      }
       const message = cancelScan
         ? 'OCR dihentikan. Teks halaman yang sudah diproses tersedia untuk diunduh.'
         : failedPages.length
@@ -564,6 +591,15 @@ function renderDetail(item, markdown, engine, record) {
   const engineLabel = item.extension === 'pdf' ? 'OCR gambar halaman · Tesseract' : engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
   const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
   transcriptHint = transcript.querySelector('.detail-pane-head small');
+  if (item.extension === 'pdf') {
+    transcriptToggle = document.createElement('button');
+    transcriptToggle.type = 'button';
+    transcriptToggle.className = 'small-button transcript-toggle';
+    transcriptToggle.textContent = 'Lihat seluruh teks';
+    transcriptToggle.disabled = true;
+    transcript.querySelector('.detail-pane-head').append(transcriptToggle);
+    transcriptToggle.addEventListener('click', toggleTranscript);
+  }
   const pre = document.createElement('pre');
   pre.className = 'transcript';
   pre.textContent = markdown || '(Tidak ada teks terdeteksi)';

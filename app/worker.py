@@ -144,6 +144,53 @@ def render_pdf_page(data: bytes, page: int, zoom: bool = False) -> bytes:
     return result.stdout
 
 
+def order_ocr_words(words: list[dict]) -> str:
+    """Assemble OCR from page coordinates, including rows split across TSV blocks."""
+    if not words:
+        return ""
+    lines = {}
+    for word in words:
+        lines.setdefault(word["line"], []).append(word)
+    fragments = []
+    for line_words in lines.values():
+        line_words.sort(key=lambda word: word["x"])
+        top = min(word["y"] for word in line_words)
+        bottom = max(word["y"] + word["h"] for word in line_words)
+        fragments.append({"x": line_words[0]["x"], "right": max(word["x"] + word["w"] for word in line_words),
+                          "top": top, "bottom": bottom, "center": (top + bottom) / 2,
+                          "text": " ".join(word["text"] for word in line_words)})
+    fragments.sort(key=lambda fragment: (fragment["center"], fragment["x"]))
+    rows = []
+    for fragment in fragments:
+        if rows and abs(fragment["center"] - rows[-1]["center"]) <= max(
+                6, min(fragment["bottom"] - fragment["top"], rows[-1]["bottom"] - rows[-1]["top"]) * .45):
+            row = rows[-1]
+            row["fragments"].append(fragment)
+            row["top"] = min(row["top"], fragment["top"])
+            row["bottom"] = max(row["bottom"], fragment["bottom"])
+        else:
+            rows.append({"center": fragment["center"], "top": fragment["top"],
+                         "bottom": fragment["bottom"], "fragments": [fragment]})
+    heights = sorted(row["bottom"] - row["top"] for row in rows)
+    typical_height = heights[len(heights) // 2]
+    output = []
+    previous_bottom = None
+    for row in rows:
+        fragments = sorted(row["fragments"], key=lambda fragment: fragment["x"])
+        pieces = []
+        last_right = None
+        for fragment in fragments:
+            if pieces:
+                pieces.append(" | " if fragment["x"] - last_right > max(18, typical_height * 1.5) else " ")
+            pieces.append(fragment["text"])
+            last_right = max(last_right or 0, fragment["right"])
+        if output:
+            output.append("\n\n" if row["top"] - previous_bottom > typical_height * 1.5 else "\n")
+        output.append("".join(pieces))
+        previous_bottom = row["bottom"]
+    return "".join(output)
+
+
 def ocr_rendered_page(jpeg: bytes) -> tuple[str, list[dict]]:
     """Read text and word locations in one Tesseract pass over the page image."""
     from PIL import Image
@@ -157,9 +204,8 @@ def ocr_rendered_page(jpeg: bytes) -> tuple[str, list[dict]]:
     )
     if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
         raise ValueError("Page image OCR failed")
-    lines = []
+    words = []
     regions = []
-    previous_line = previous_paragraph = None
     for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", errors="replace")),
                               delimiter="\t", quoting=csv.QUOTE_NONE):
         try:
@@ -171,18 +217,12 @@ def ocr_rendered_page(jpeg: bytes) -> tuple[str, list[dict]]:
             continue
         if not word:
             continue
-        paragraph = line[:3]
-        if line != previous_line:
-            if lines:
-                lines.append("\n\n" if paragraph != previous_paragraph else "\n")
-            previous_line, previous_paragraph = line, paragraph
-        elif lines and not lines[-1].endswith(("\n", " ")):
-            lines.append(" ")
-        lines.append(word)
+        if 0 <= x < width and 0 <= y < height and 0 < w <= width-x and 0 < h <= height-y:
+            words.append({"line": line, "x": x, "y": y, "w": w, "h": h, "text": word})
         if confidence >= 35 and 0 <= x < width and 0 <= y < height and 0 < w <= width-x and 0 < h <= height-y and len(regions) < 600:
             regions.append({"x": x/width, "y": y/height, "w": w/width, "h": h/height,
                             "text": word[:300], "source": "tesseract"})
-    return "".join(lines).strip(), regions
+    return order_ocr_words(words), regions
 
 
 def read_pdf_text(data: bytes) -> tuple[int, bytes]:
