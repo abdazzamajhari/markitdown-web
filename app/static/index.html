@@ -5,22 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'">
-  <title>MarkItDown Web · Dokumen ke Markdown</title>
+  <meta name="description" content="PrivasiDoc: ekstraksi teks, kompresi gambar dan PDF, resize piksel, dan editor tanda tangan dengan kontrol pengiriman AI.">
+  <title>PrivasiDoc · Kendali dokumen dan data pribadi</title>
   <link rel="stylesheet" href="/static/style.css">
   <script defer src="/static/zip.js"></script>
   <script defer src="/static/app.js"></script>
+  <script defer src="/static/tools.js"></script>
 </head>
 <body>
   <main class="wrap">
     <header class="site-header">
-      <div class="brand"><span class="mark" aria-hidden="true">M<span>↓</span></span><span>MarkItDown <strong>Web</strong></span></div>
-      <span class="header-badge"><span class="status-dot" aria-hidden="true"></span> Tanpa akun pengguna</span>
+      <div class="brand"><span class="mark" aria-hidden="true">P<span>◆</span></span><span>Privasi<strong>Doc</strong></span></div>
+      <div class="header-actions"><span class="header-badge"><span class="status-dot" aria-hidden="true"></span> Dokumen dalam kendali Anda</span><button class="small-button" id="clear-session" type="button">Bersihkan sesi</button></div>
     </header>
 
+    <section class="suite-intro"><p class="eyebrow">PENGELOLAAN DOKUMEN & PELINDUNGAN DATA PRIBADI</p><h1>Lebih ringkas.<br><em>Lebih terkendali.</em></h1><p class="lead">Ekstrak teks, perkecil berkas, atur ukuran gambar, dan letakkan tanda tangan pada PDF dalam satu ruang kerja.</p></section>
+    <div class="privacy-strip"><span>◆ Pemrosesan di server aplikasi</span><span>◇ Hapus metadata saat ekspor</span><span>↗ AI eksternal sesuai pilihan</span></div>
+    <nav class="tool-tabs" aria-label="Fitur dokumen">
+      <button type="button" class="active" data-tool="ocr" aria-pressed="true">01 <span>Ekstraksi teks</span></button>
+      <button type="button" data-tool="image" aria-pressed="false">02 <span>Kompresi & resize</span></button>
+      <button type="button" data-tool="compress" aria-pressed="false">03 <span>Kompresi PDF</span></button>
+      <button type="button" data-tool="sign" aria-pressed="false">04 <span>Tanda tangan PDF</span></button>
+    </nav>
+    <div id="tool-ocr" class="tool-panel">
     <section class="hero" aria-labelledby="page-title">
       <div class="hero-copy">
         <p class="eyebrow">DOKUMEN → MARKDOWN</p>
-        <h1 id="page-title">Semua teks Anda,<br><em>siap digunakan.</em></h1>
+        <h2 id="page-title">Teks dari setiap halaman,<br>siap digunakan.</h2>
         <p class="lead">Letakkan beberapa dokumen atau screenshot. Lihat hasil ekstraksi per berkas, periksa lokasi teks pada gambar, lalu unduh satu atau semua hasil.</p>
         <div class="hero-points"><span>✦ Banyak berkas</span><span>✦ Pratinjau teks</span><span>✦ Unduh sekaligus</span></div>
       </div>
@@ -34,6 +45,7 @@
         <input id="picker" type="file" accept=".pdf,.docx,.pptx,.xlsx,.txt,.csv,.json,.png,.jpg,.jpeg,.webp" multiple hidden>
         <p id="upload-hint" class="hint">PNG, JPG, WebP, PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON · hingga 10 MB per berkas · PDF maksimal 30 halaman · jumlah PDF dalam antrean tidak dibatasi.</p>
         <p id="ocr-mode" class="ocr-mode" role="status">Memeriksa layanan OCR…</p>
+        <label class="check-line consent"><input type="checkbox" id="external-ai"> Gunakan SumoPod AI untuk OCR gambar dan pemeriksaan bahasa PDF</label><p class="hint">Saat aktif, gambar terpisah dan teks OCR PDF dikirim ke SumoPod. Saat nonaktif, OCR berjalan dengan Tesseract di server aplikasi.</p>
       </div>
     </section>
 
@@ -61,7 +73,57 @@
       </div>
       <ol id="files" class="file-list"></ol>
     </section>
-    <footer>Berkas diproses dalam memori server dan tidak disimpan permanen. Halaman PDF dibaca dengan Tesseract lokal; teks OCR halaman dikirim ke SumoPod Netra untuk pemeriksaan pola bahasa. Netra tidak menerima gambar PDF pada tahap ini.</footer>
+    </div>
+    <section id="tool-image" class="tool-panel results" hidden aria-labelledby="image-title">
+      <p class="eyebrow">GAMBAR · TANPA PENGIRIMAN KE AI</p><h2 id="image-title">Kompresi & resize gambar</h2><p class="tool-description">Atur lebar dan tinggi dalam piksel, kualitas, dan format keluaran. Bandingkan ukuran hasil sebelum mengunduh.</p>
+      <form id="image-form" class="tool-form">
+        <label class="upload-field">Pilih gambar<input id="image-files" type="file" accept=".png,.jpg,.jpeg,.webp" multiple required><small>PNG, JPEG, WebP · maksimal 10 MB dan 24 megapiksel per gambar</small></label>
+        <div class="settings-grid">
+          <label>Lebar (px)<input id="image-width" type="number" min="1" max="12000" placeholder="Ukuran asli"></label>
+          <label>Tinggi (px)<input id="image-height" type="number" min="1" max="12000" placeholder="Otomatis"></label>
+          <label>Format<select id="image-format"><option value="webp">WebP</option><option value="jpeg">JPEG</option><option value="png">PNG (lossless)</option></select></label>
+          <label>Kualitas <output id="image-quality-value">80</output><input id="image-quality" type="range" min="20" max="95" value="80"></label>
+        </div>
+        <div class="option-row"><label class="check-line"><input id="image-ratio" type="checkbox" checked>Pertahankan rasio gambar</label><label class="check-line"><input id="image-metadata" type="checkbox" checked>Hapus metadata EXIF & profil warna</label></div>
+        <p class="hint">Kosongkan ukuran untuk mempertahankan dimensi. Dengan rasio aktif, gambar masuk ke batas lebar/tinggi yang dipilih. PNG memakai kompresi tanpa kehilangan kualitas; pengaturan kualitas berlaku untuk JPEG/WebP.</p>
+        <button type="submit" class="primary-button">Proses gambar</button><p id="image-status" class="tool-status" role="status" aria-live="polite"></p>
+      </form><div id="image-results" class="tool-results"></div>
+    </section>
+    <section id="tool-compress" class="tool-panel results" hidden aria-labelledby="compress-title">
+      <p class="eyebrow">PDF · TANPA PENGIRIMAN KE AI</p><h2 id="compress-title">Kompresi PDF</h2><p class="tool-description">Optimalkan struktur PDF atau perkecil gambar di dalamnya. Teks tetap dapat dipilih jika tersedia pada PDF sumber.</p>
+      <form id="compress-form" class="tool-form">
+        <label class="upload-field">Pilih PDF<input id="compress-files" type="file" accept=".pdf" multiple required><small>Maksimal 10 MB dan 30 halaman per PDF</small></label>
+        <div class="settings-grid">
+          <label>Profil<select id="pdf-profile"><option value="lossless">Tanpa penurunan kualitas</option><option value="balanced">Seimbang</option><option value="small">Ukuran kecil</option></select></label>
+          <label>Resolusi gambar (DPI)<input id="pdf-dpi" type="number" min="72" max="300" value="150" disabled></label>
+          <label>Kualitas gambar <output id="pdf-quality-value">75</output><input id="pdf-quality" type="range" min="20" max="95" value="75" disabled></label>
+        </div>
+        <label class="check-line"><input id="pdf-metadata" type="checkbox" checked>Hapus metadata dokumen dan XMP</label><p class="hint">Profil seimbang/ukuran kecil dapat mengurangi ketajaman gambar. Ukuran akhir bergantung pada isi PDF dan bisa tidak lebih kecil. PDF dengan field tanda tangan kriptografis tidak diubah.</p>
+        <button type="submit" class="primary-button">Kompres PDF</button><p id="compress-status" class="tool-status" role="status" aria-live="polite"></p>
+      </form><div id="compress-results" class="tool-results"></div>
+    </section>
+    <section id="tool-sign" class="tool-panel results" hidden aria-labelledby="sign-title">
+      <p class="eyebrow">EDITOR PDF · TANPA PENGIRIMAN KE AI</p><h2 id="sign-title">Letakkan tanda tangan Anda</h2><p class="tool-description">Gambar atau unggah tanda tangan, pilih halaman, lalu geser dan atur ukurannya pada pratinjau PDF.</p>
+      <p class="signature-note">Fitur ini menempatkan tanda tangan visual pada PDF. Sertifikat digital dan verifikasi identitas penanda tangan belum tersedia.</p>
+      <div class="editor-layout">
+        <div class="editor-settings">
+          <label class="upload-field">Dokumen PDF<input id="sign-file" type="file" accept=".pdf"><small>Maksimal 10 MB · 30 halaman</small></label>
+          <label class="upload-field">Unggah gambar tanda tangan<input id="signature-file" type="file" accept=".png,.jpg,.jpeg,.webp"><small>Maksimal 1 MB · 2 megapiksel</small></label>
+          <p class="field-caption">Atau gambar tanda tangan di bawah</p><canvas id="signature-canvas" width="800" height="280" aria-label="Area menggambar tanda tangan"></canvas>
+          <div class="option-row"><button id="signature-clear" type="button" class="small-button">Hapus goresan</button><button id="signature-use" type="button" class="small-button">Gunakan goresan</button></div>
+          <label class="check-line"><input id="signature-white" type="checkbox">Hilangkan latar hampir putih</label>
+          <button id="signature-add" type="button" class="secondary-button" disabled>+ Letakkan di halaman ini</button>
+          <label>Lebar tanda tangan (%)<input id="signature-width" type="range" min="5" max="80" value="25" disabled></label>
+          <div class="position-grid"><label>X (%)<input id="signature-x" type="number" min="0" max="100" step="0.1" disabled></label><label>Y (%)<input id="signature-y" type="number" min="0" max="100" step="0.1" disabled></label></div>
+          <div class="option-row"><button id="signature-remove" class="small-button" type="button" disabled>Hapus posisi</button><span id="signature-count" class="hint">0 tanda tangan</span></div>
+          <label class="check-line"><input id="sign-metadata" type="checkbox" checked>Hapus metadata PDF</label>
+          <button id="sign-export" class="primary-button" type="button" disabled>↓ Simpan PDF bertanda tangan</button>
+          <p id="sign-status" class="tool-status" role="status" aria-live="polite">Pilih PDF untuk memulai.</p><div id="sign-result"></div>
+        </div>
+        <div class="editor-preview"><div class="page-controls"><button id="sign-prev" type="button" disabled>← Sebelumnya</button><span id="sign-page-label">Halaman —</span><button id="sign-next" type="button" disabled>Berikutnya →</button></div><p class="hint editor-help">Klik tanda tangan untuk memilih. Geser kotaknya atau gunakan X/Y untuk mengatur posisi. Ukuran mengikuti rasio gambar.</p><div class="editor-scroll"><div id="sign-stage" class="sign-stage"><img id="sign-page" alt="Pratinjau halaman PDF" hidden><div id="signature-layer"></div></div><p id="sign-empty" class="editor-empty">Pratinjau dokumen akan muncul di sini.</p></div></div>
+      </div>
+    </section>
+    <footer><strong>PrivasiDoc.</strong> Unggahan diproses di memori server dan tidak disimpan sebagai arsip permanen oleh aplikasi. Kompresi/resize dan tanda tangan tidak memakai AI eksternal. Metadata yang dihapus tidak mencakup data pribadi yang terlihat di isi dokumen. Gunakan “Bersihkan sesi” untuk melepas berkas dan hasil dari halaman ini. <a href="https://github.com/abdazzamajhari/markitdown-web" target="_blank" rel="noopener noreferrer">Kode sumber</a></footer>
   </main>
 </body>
 </html>

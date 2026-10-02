@@ -53,13 +53,26 @@ REGIONS_PROMPT = (
     "Omit areas whose coordinates are uncertain."
 )
 
-app = FastAPI(title="MarkItDown Web", version="1.0.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="PrivasiDoc", version="2.0.0", docs_url=None, redoc_url=None)
 slots = asyncio.Semaphore(1)
 quota_lock = asyncio.Lock()
 recent_requests: deque[float] = deque()
 region_requests: deque[float] = deque()
 review_requests: deque[float] = deque()
 review_slots = asyncio.Semaphore(2)
+tool_requests: deque[float] = deque()
+
+
+@app.middleware("http")
+async def privacy_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def validate_filename(raw: str | None) -> tuple[str, str]:
@@ -126,6 +139,14 @@ def run_worker(data: bytes, extension: str, mode: str | None = None, timeout: in
         raise HTTPException(413, "Dilewati: PDF melebihi 30 halaman")
     if proc.returncode == 7:
         raise HTTPException(400, "Nomor halaman PDF tidak tersedia")
+    if proc.returncode == 9:
+        try:
+            error = json.loads(proc.stderr)
+            if error["status"] not in {400, 409, 413, 415, 422} or not isinstance(error["message"], str):
+                raise ValueError
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(422, "Dokumen tidak dapat diproses") from None
+        raise HTTPException(error["status"], error["message"])
     if extension == ".pdf" and proc.returncode != 0:
         raise HTTPException(422, "PDF tidak dapat dibaca atau diproses; periksa sandi dan coba pecah PDF menjadi berkas lebih kecil")
     if proc.returncode != 0:
@@ -433,7 +454,7 @@ async def index():
 
 @app.get("/static/{filename}", include_in_schema=False)
 async def static(filename: str):
-    if filename not in {"app.js", "style.css", "zip.js"}:
+    if filename not in {"app.js", "style.css", "zip.js", "tools.js"}:
         raise HTTPException(404)
     return FileResponse(ROOT / "static" / filename, headers={"Cache-Control": "no-cache"})
 
@@ -444,6 +465,7 @@ async def image_regions(request: Request):
     _, extension = validate_filename(request.headers.get("x-filename"))
     if extension not in IMAGE_FORMATS:
         raise HTTPException(415, "Pratinjau lokasi teks hanya tersedia untuk gambar")
+    external_ai = request.headers.get("x-external-ai") == "true"
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > MAX_BYTES:
         raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
@@ -453,7 +475,8 @@ async def image_regions(request: Request):
             raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
         data.extend(chunk)
     validate_content(data, extension)
-    vision_provider()
+    if external_ai:
+        vision_provider()
     async with quota_lock:
         now = time.monotonic()
         while region_requests and region_requests[0] <= now - 60:
@@ -465,9 +488,13 @@ async def image_regions(request: Request):
             raise HTTPException(429, "Server sedang memproses berkas lain; coba lagi sebentar", headers={"Retry-After": "3"})
         region_requests.append(now)
     async with slots:
-        png = await run_in_threadpool(run_worker, bytes(data), extension, "prepare-vision", timeout=20)
-        result = await run_in_threadpool(analyze_deepseek, png, "image/png", allow_empty=True, locate=True)
-    return JSONResponse({"engine": SUMOPOD_MODEL, "regions": result["regions"]},
+        if external_ai:
+            png = await run_in_threadpool(run_worker, bytes(data), extension, "prepare-vision", timeout=20)
+            result = await run_in_threadpool(analyze_deepseek, png, "image/png", allow_empty=True, locate=True)
+        else:
+            output = await run_in_threadpool(run_worker, bytes(data), extension, "image-local-regions", timeout=60)
+            result = json.loads(output)
+    return JSONResponse({"engine": SUMOPOD_MODEL if external_ai else "tesseract", "regions": result["regions"]},
                         headers={"Cache-Control": "no-store"})
 
 
@@ -522,6 +549,8 @@ async def pdf_preview(request: Request, page: int = 1, preview_only: bool = Fals
 @app.post("/api/pdf-language-check")
 async def pdf_language_check(request: Request):
     """Optional text-only review; a provider failure never discards PDF OCR."""
+    if request.headers.get("x-external-ai") != "true":
+        raise HTTPException(400, "Aktifkan pilihan AI eksternal untuk mengirim teks ke SumoPod")
     data = bytearray()
     async for chunk in request.stream():
         if len(data) + len(chunk) > 24 * 1024:
@@ -559,7 +588,8 @@ async def convert_file(request: Request):
             raise HTTPException(413, "Ukuran berkas melebihi 10 MB")
         data.extend(chunk)
     validate_content(data, extension)
-    if extension in IMAGE_FORMATS:
+    external_ai = request.headers.get("x-external-ai") == "true"
+    if extension in IMAGE_FORMATS and external_ai:
         vision_provider()
     # Bound simultaneous traffic; the browser waits and retries a temporary 429.
     async with quota_lock:
@@ -574,9 +604,13 @@ async def convert_file(request: Request):
             raise HTTPException(429, "Server sibuk; coba lagi sebentar", headers={"Retry-After": "3"})
         recent_requests.append(now)
     async with slots:
-        if extension in IMAGE_FORMATS:
+        if extension in IMAGE_FORMATS and external_ai:
             markdown = await run_in_threadpool(convert_sumopod, bytes(data), extension)
             engine = SUMOPOD_MODEL
+        elif extension in IMAGE_FORMATS:
+            output = await run_in_threadpool(run_worker, bytes(data), extension, "image-local-ocr", timeout=60)
+            markdown = output.decode("utf-8")
+            engine = "tesseract"
         elif extension == ".pdf":
             markdown, engine = await run_in_threadpool(convert_pdf, bytes(data))
         else:
@@ -593,6 +627,87 @@ async def convert_file(request: Request):
             "X-OCR-Engine": engine,
         },
     )
+
+
+async def read_tool_upload(request: Request, allowed, limit=MAX_BYTES):
+    name, extension = validate_filename(request.headers.get("x-filename"))
+    if extension not in allowed:
+        raise HTTPException(415, "Format berkas tidak didukung untuk fitur ini")
+    options_header = request.headers.get("x-options", "e30=")
+    if len(options_header) > 12000:
+        raise HTTPException(400, "Pengaturan terlalu panjang")
+    try:
+        options = json.loads(base64.urlsafe_b64decode(options_header))
+        if not isinstance(options, dict):
+            raise ValueError
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Pengaturan tidak valid") from None
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > limit:
+            raise HTTPException(413, "Unggahan melebihi batas ukuran")
+        data.extend(chunk)
+    validate_content(data, extension)
+    return name, extension, bytes(data), options
+
+
+async def offline_tool(data, extension, operation, options):
+    async with quota_lock:
+        now = time.monotonic()
+        while tool_requests and tool_requests[0] <= now - 60:
+            tool_requests.popleft()
+        if len(tool_requests) >= 24 or slots.locked():
+            raise HTTPException(429, "Server sibuk; coba kembali sebentar", headers={"Retry-After": "3"})
+        tool_requests.append(now)
+    mode = operation + ":" + base64.urlsafe_b64encode(json.dumps(options).encode()).decode()
+    async with slots:
+        return await run_in_threadpool(run_worker, data, extension, mode, timeout=60)
+
+
+def tool_download(output, name, suffix):
+    try:
+        size = int.from_bytes(output[:4], "big")
+        if not 0 < size < 4096:
+            raise ValueError
+        info = json.loads(output[4:4 + size])
+        binary = output[4 + size:]
+        fmt = info["format"]
+        mime, ext = {"pdf": ("application/pdf", "pdf"), "jpeg": ("image/jpeg", "jpg"),
+                     "png": ("image/png", "png"), "webp": ("image/webp", "webp")}[fmt]
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(502, "Hasil pemrosesan tidak valid") from None
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(name).stem)[:70] or "document"
+    return Response(binary, media_type=mime, headers={
+        "Content-Disposition": f'attachment; filename="{stem}-{suffix}.{ext}"',
+        "X-Document-Info": json.dumps(info, separators=(",", ":")), "Cache-Control": "no-store"})
+
+
+@app.post("/api/image-compress")
+async def image_compress(request: Request):
+    name, extension, data, options = await read_tool_upload(request, IMAGE_FORMATS)
+    output = await offline_tool(data, extension, "tool-image", options)
+    return tool_download(output, name, "privasi")
+
+
+@app.post("/api/pdf-compress")
+async def pdf_compress(request: Request):
+    name, extension, data, options = await read_tool_upload(request, {".pdf"})
+    output = await offline_tool(data, extension, "tool-compress", options)
+    return tool_download(output, name, "kompresi")
+
+
+@app.post("/api/pdf-editor-preview")
+async def pdf_editor_preview(request: Request):
+    _, extension, data, options = await read_tool_upload(request, {".pdf"})
+    output = await offline_tool(data, extension, "tool-preview", options)
+    return Response(output, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/pdf-sign")
+async def pdf_sign(request: Request):
+    name, extension, data, options = await read_tool_upload(request, {".pdf"}, 11 * 1024 * 1024)
+    output = await offline_tool(data, extension, "tool-sign", options)
+    return tool_download(output, name, "tanda-tangan")
 
 
 @app.exception_handler(HTTPException)

@@ -17,6 +17,7 @@ def client(monkeypatch):
     recent_requests.clear()
     region_requests.clear()
     review_requests.clear()
+    app_main.tool_requests.clear()
     monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr(app_main, "verify_vision", lambda: None)
@@ -26,7 +27,7 @@ def client(monkeypatch):
 
 
 def upload(client, name, data, path="/api/convert"):
-    return client.post(path, content=data, headers={"X-Filename": name})
+    return client.post(path, content=data, headers={"X-Filename": name, "X-External-AI": "true"})
 
 
 def image_bytes():
@@ -105,7 +106,7 @@ def test_home_and_configuration(client, monkeypatch):
     assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4.1-flash:netra"}
     monkeypatch.setenv("DEEPSEEK_API_KEY", "ignored-key")
     assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4.1-flash:netra"}
-    assert "MarkItDown Web" in client.get("/").text
+    assert "PrivasiDoc" in client.get("/").text
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
 
 
@@ -391,7 +392,7 @@ def test_pdf_language_review_uses_text_only_and_preserves_ocr(client, monkeypatc
 
     monkeypatch.setattr("app.main.httpx.post", provider)
     text = "Ini adalah teks janggal pada hasil OCR halaman."
-    response = client.post("/api/pdf-language-check", json={"text": text})
+    response = client.post("/api/pdf-language-check", json={"text": text}, headers={"X-External-AI": "true"})
     assert response.status_code == 200, response.text
     assert response.json()["suspect_spans"] == ["teks janggal"]
     assert response.json()["scope"] == "text_only"
@@ -400,7 +401,7 @@ def test_pdf_language_review_uses_text_only_and_preserves_ocr(client, monkeypatc
     assert "image_url" not in json.dumps(sent[0])
 
     monkeypatch.setattr("app.main.httpx.post", lambda *a, **kw: httpx.Response(503))
-    unavailable = client.post("/api/pdf-language-check", json={"text": text})
+    unavailable = client.post("/api/pdf-language-check", json={"text": text}, headers={"X-External-AI": "true"})
     assert unavailable.status_code == 502
     pdf = upload(client, "text.pdf", text_layer_pdf_bytes(), "/api/pdf-preview?page=1")
     assert pdf.status_code == 200 and "LAPISAN TERBACA" in pdf.json()["page_text"]

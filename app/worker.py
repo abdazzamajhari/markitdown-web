@@ -267,11 +267,22 @@ def main() -> int:
     socket.create_connection = block_network
     extension = sys.argv[1]
     try:
-        data = sys.stdin.buffer.read(10 * 1024 * 1024 + 1)
-        if extension in IMAGE_EXTENSIONS:
+        mode = sys.argv[2] if len(sys.argv) > 2 else ""
+        data = sys.stdin.buffer.read((11 if mode.startswith("tool-sign:") else 10) * 1024 * 1024 + 1)
+        if mode.startswith("tool-"):
+            from app.document_tools import ToolError, execute
+            try:
+                output = execute(data, mode)
+            except ToolError as exc:
+                sys.stderr.write(json.dumps({"status": exc.status, "message": exc.message}))
+                return 9
+        elif extension in IMAGE_EXTENSIONS:
             code, output = prepare_image(data, extension)
             if code:
                 return code
+            if mode in {"image-local-ocr", "image-local-regions"}:
+                text, regions = ocr_rendered_page(output)
+                output = json.dumps({"regions": regions}).encode() if mode == "image-local-regions" else text.encode("utf-8")
         elif extension == ".pdf" and len(sys.argv) > 2 and sys.argv[2] == "pdf-convert":
             code, output = read_pdf_text(data)
             if code:
@@ -288,7 +299,7 @@ def main() -> int:
                 io.BytesIO(data), file_extension=extension,
             )
             output = (result.markdown or "").encode("utf-8")
-        output_limit = 10 * 1024 * 1024 if len(sys.argv) > 2 and sys.argv[2] == "prepare-vision" else 2 * 1024 * 1024
+        output_limit = 15 * 1024 * 1024 + 4096 if mode.startswith("tool-") else 10 * 1024 * 1024 if mode == "prepare-vision" else 2 * 1024 * 1024
         if len(output) > output_limit:
             return 3
         sys.stdout.buffer.write(output)

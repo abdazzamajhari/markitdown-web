@@ -7,6 +7,7 @@ const ocrMode = document.querySelector('#ocr-mode');
 const emptyState = document.querySelector('#empty-state');
 const downloadAll = document.querySelector('#download-all');
 const downloadCombined = document.querySelector('#download-combined');
+const externalAi = document.querySelector('#external-ai');
 const queue = [];
 const completed = [];
 const objectUrls = new Set();
@@ -65,7 +66,7 @@ function makeRow(file) {
   progress.setAttribute('aria-label', `Progres ${file.name}`);
   row.append(head, progress);
   list.append(row);
-  return {row, state, progress, file, extension};
+  return {row, state, progress, file, extension, externalAi: externalAi.checked};
 }
 function markError(item, message) {
   item.row.classList.add('error');
@@ -94,12 +95,14 @@ function addFiles(files) {
   void processQueue();
 }
 function upload(item) {
+  if (!externalAi.checked) item.externalAi = false;
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/convert');
     xhr.timeout = 180000;
     xhr.setRequestHeader('X-Filename', encodeURIComponent(item.file.name));
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    if (item.externalAi) xhr.setRequestHeader('X-External-AI', 'true');
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) {
         const percent = Math.round(event.loaded / event.total * 100);
@@ -200,7 +203,7 @@ function renderDetail(item, markdown, engine, record) {
   let reviewStatus;
   if (imageFormats.has(item.extension)) {
     details.open = true;
-    const source = makePane('Gambar sumber', 'Kotak: DeepSeek V4.1 Flash · Netra');
+    const source = makePane('Gambar sumber', item.externalAi ? 'Kotak: DeepSeek V4.1 Flash · Netra' : 'Kotak: Tesseract lokal');
     const zoom = document.createElement('button');
     zoom.type = 'button';
     zoom.className = 'zoom-button';
@@ -212,7 +215,7 @@ function renderDetail(item, markdown, engine, record) {
     source.querySelector('.detail-pane-head').append(zoom);
     const legend = document.createElement('div');
     legend.className = 'region-legend';
-    legend.textContent = '▣ Kotak merah menandai area yang dipetakan DeepSeek. Klik untuk melihat teks.';
+    legend.textContent = '▣ Kotak merah menandai area teks OCR. Klik untuk melihat teks.';
     source.append(legend);
     const scroll = document.createElement('div');
     scroll.className = 'image-scroll';
@@ -238,10 +241,10 @@ function renderDetail(item, markdown, engine, record) {
         image.src = URL.createObjectURL(item.file);
         objectUrls.add(image.src);
       }
-      regionMessage.textContent = 'Memetakan lokasi teks dengan DeepSeek…';
+      regionMessage.textContent = 'Memetakan lokasi teks OCR…';
       try {
         const response = await fetch('/api/regions', {
-          method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'},
+          method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream', ...(item.externalAi && externalAi.checked ? {'X-External-AI': 'true'} : {})},
           body: item.file,
         });
         const payload = await response.json();
@@ -340,6 +343,7 @@ function renderDetail(item, markdown, engine, record) {
     };
     const showLanguageReview = (page) => {
       if (!reviewStatus) return;
+      if (!item.externalAi || !externalAi.checked) { reviewStatus.textContent = 'Mode privat: teks OCR tidak dikirim ke AI eksternal.'; return; }
       const review = languageReviews.get(page);
       if (!review) {
         reviewStatus.textContent = 'Pemeriksaan bahasa menunggu hasil OCR halaman ini.';
@@ -358,15 +362,15 @@ function renderDetail(item, markdown, engine, record) {
       }
     };
     const queueLanguageReview = (page, ocrText) => {
-      if (!ocrText || languageReviews.get(page)?.text === ocrText) return;
+      if (!item.externalAi || !externalAi.checked || !ocrText || languageReviews.get(page)?.text === ocrText) return;
       const entry = {status: 'pending', text: ocrText};
       languageReviews.set(page, entry);
       if (currentPage === page) showLanguageReview(page);
       reviewQueue = reviewQueue.catch(() => {}).then(async () => {
-        if (languageReviews.get(page) !== entry) return;
+        if (!externalAi.checked || languageReviews.get(page) !== entry) return;
         try {
           const response = await fetch('/api/pdf-language-check', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
+            method: 'POST', headers: {'Content-Type': 'application/json', 'X-External-AI': 'true'},
             body: JSON.stringify({text: ocrText}),
           });
           const result = await response.json();
@@ -588,7 +592,7 @@ function renderDetail(item, markdown, engine, record) {
     });
     loadRegions = async () => { if (!loaded) await showPage(1); };
   }
-  const engineLabel = item.extension === 'pdf' ? 'OCR gambar halaman · Tesseract' : engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
+  const engineLabel = item.extension === 'pdf' ? 'OCR gambar halaman · Tesseract' : engine === 'tesseract' ? 'Tesseract lokal' : engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
   const transcript = makePane('Teks terdeteksi & terekstraksi', engineLabel);
   transcriptHint = transcript.querySelector('.detail-pane-head small');
   if (item.extension === 'pdf') {
@@ -646,7 +650,7 @@ async function processQueue() {
         }
       }
       const {markdown, engine} = result;
-      const label = engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
+      const label = engine === 'tesseract' ? 'Tesseract lokal' : engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
       item.state.textContent = item.extension === 'pdf' ? 'Menyiapkan OCR halaman PDF…' :
         markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       const record = {name: item.file.name, markdown};
@@ -671,12 +675,12 @@ async function processQueue() {
 }
 
 downloadAll.addEventListener('click', () => {
-  try { saveBlob(createMarkdownZip(completed), 'markitdown-hasil.zip'); }
+  try { saveBlob(createMarkdownZip(completed), 'privasidoc-hasil.zip'); }
   catch { notice.textContent = 'Gagal menyiapkan ZIP. Coba unduh hasil per berkas.'; }
 });
 downloadCombined.addEventListener('click', () => {
   const text = completed.map(({name, markdown}) => `# ${name.replace(/[\r\n]/g, ' ')}\n\n${markdown}`).join('\n\n---\n\n');
-  saveBlob(new Blob([text], {type: 'text/markdown;charset=utf-8'}), 'markitdown-gabungan.md');
+  saveBlob(new Blob([text], {type: 'text/markdown;charset=utf-8'}), 'privasidoc-gabungan.md');
 });
 for (const box of document.querySelectorAll('.demo-box')) {
   box.addEventListener('click', () => {
@@ -700,13 +704,16 @@ document.addEventListener('dragover', (event) => {
 });
 document.addEventListener('dragleave', (event) => { if (!event.relatedTarget) document.body.classList.remove('page-dragging'); });
 document.addEventListener('drop', (event) => {
-  if (event.dataTransfer?.files?.length) { event.preventDefault(); addFiles(event.dataTransfer.files); }
+  if (event.dataTransfer?.files?.length) {
+    event.preventDefault();
+    if (!document.querySelector('#tool-ocr').hidden) addFiles(event.dataTransfer.files);
+  }
   document.body.classList.remove('page-dragging');
 });
 window.addEventListener('pagehide', () => { for (const url of objectUrls) URL.revokeObjectURL(url); });
 fetch('/api/capabilities', {cache: 'no-store'})
   .then((response) => response.json())
   .then(({image_ocr, image_ocr_model}) => {
-    ocrMode.textContent = `PDF: gambar penuh per halaman dibaca dengan Tesseract lokal (maksimal 30 halaman). Gambar terpisah: ${image_ocr === 'unavailable' ? 'perlu SUMOPOD_API_KEY' : image_ocr_model + ' melalui SumoPod'}.`;
+    ocrMode.textContent = `Mode privat: Tesseract lokal untuk gambar dan PDF (maksimal 30 halaman). AI opsional: ${image_ocr === 'unavailable' ? 'belum dikonfigurasi' : image_ocr_model + ' melalui SumoPod'}.`;
   })
   .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });
