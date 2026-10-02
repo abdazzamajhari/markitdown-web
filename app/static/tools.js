@@ -1,4 +1,4 @@
-/* PrivasiDoc: offline server tools and a normalized-coordinate PDF editor. */
+/* PrivasiGuard: categorized server tools and a normalized-coordinate PDF editor. */
 (() => {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -35,10 +35,27 @@
     } finally { clearTimeout(timer); }
   }
 
-  document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => {
+  const categoryDescriptions = {
+    image: 'Alat untuk gambar PNG, JPEG, WebP, dan TIFF satu halaman.',
+    pdf: 'Alat untuk dokumen PDF: OCR halaman, kompresi, dan tanda tangan visual.',
+    document: 'Ekstraksi teks dari DOCX, PPTX, XLSX, TXT, CSV, dan JSON.',
+  };
+  const lastTools = {image: 'ocr', pdf: 'ocr', document: 'ocr'};
+  function selectTool(button) {
+    lastTools[button.dataset.category] = button.dataset.tool;
     document.querySelectorAll('[data-tool]').forEach((tab) => { tab.classList.toggle('active', tab === button); tab.setAttribute('aria-pressed', String(tab === button)); });
     document.querySelectorAll('.tool-panel').forEach((panel) => { panel.hidden = panel.id !== `tool-${button.dataset.tool}`; });
-  }));
+  }
+  function selectCategory(category) {
+    document.querySelectorAll('[data-category-select]').forEach((tab) => { const active = tab.dataset.categorySelect === category; tab.classList.toggle('active', active); tab.setAttribute('aria-pressed', String(active)); });
+    document.querySelectorAll('[data-tool]').forEach((tab) => { tab.hidden = tab.dataset.category !== category; });
+    $('category-description').textContent = categoryDescriptions[category];
+    window.setOcrCategory(category);
+    selectTool(document.querySelector(`[data-category="${category}"][data-tool="${lastTools[category]}"]`));
+  }
+  document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => selectTool(button)));
+  document.querySelectorAll('[data-category-select]').forEach((button) => button.addEventListener('click', () => selectCategory(button.dataset.categorySelect)));
+  selectCategory('image');
   $('clear-session').addEventListener('click', () => {
     for (const url of urls) revoke(url);
     document.querySelectorAll('input[type=file]').forEach((input) => { input.value = ''; });
@@ -49,7 +66,7 @@
   [['image-quality', 'image-quality-value'], ['pdf-quality', 'pdf-quality-value']].forEach(([input, output]) => {
     $(input).addEventListener('input', () => { $(output).value = $(input).value; });
   });
-  $('image-format').addEventListener('change', () => { $('image-quality').disabled = $('image-format').value === 'png'; });
+  $('image-format').addEventListener('change', () => { $('image-quality').disabled = ['png', 'tiff'].includes($('image-format').value); });
   $('pdf-profile').addEventListener('change', () => {
     const profile = $('pdf-profile').value;
     $('pdf-dpi').disabled = $('pdf-quality').disabled = profile === 'lossless';
@@ -58,7 +75,12 @@
     $('pdf-quality-value').value = $('pdf-quality').value;
   });
 
-  function outputCard(file, blob, response, images = false) {
+  async function browserPreview(source, name, maxPixels = 24000000) {
+    if (!/\.(tif|tiff)$/i.test(name)) return source;
+    const response = await request('/api/image-preview', {name}, {max_pixels: maxPixels}, source);
+    return response.blob();
+  }
+  async function outputCard(file, blob, response, images = false) {
     const card = document.createElement('article'); card.className = 'output-card';
     const title = document.createElement('h3'); title.textContent = file.name;
     const info = JSON.parse(response.headers.get('X-Document-Info') || '{}');
@@ -68,17 +90,19 @@
     stats.textContent = `${bytesLabel(file.size)} → ${bytesLabel(blob.size)} · ${change >= 0 ? 'berkurang' : 'bertambah'} ${Math.abs(change).toFixed(1)}%`;
     const detail = document.createElement('p'); detail.className = 'hint';
     detail.textContent = images ? `${info.original_pixels.join(' × ')} → ${info.pixels.join(' × ')} px · ${info.format.toUpperCase()}` : `${info.pages} halaman · ${info.images_reencoded || 0} gambar dikompres ulang`;
-    const name = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'privasidoc-hasil';
+    const name = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'privasiguard-hasil';
     const button = document.createElement('button'); button.type = 'button'; button.className = 'primary-button'; button.textContent = '↓ Unduh hasil';
     button.addEventListener('click', () => download(blob, name));
     card.append(title, stats, detail);
     if (images) {
       const compare = document.createElement('div'); compare.className = 'compare-images';
-      [[file, 'Sebelum'], [blob, 'Sesudah']].forEach(([source, label]) => {
+      for (const [source, sourceName, label] of [[file, file.name, 'Sebelum'], [blob, `hasil.${info.format}`, 'Sesudah']]) {
         const figure = document.createElement('figure'), img = document.createElement('img'), caption = document.createElement('figcaption');
-        img.src = makeUrl(source); img.alt = `${label}: ${file.name}`; caption.textContent = label;
+        img.alt = `${label}: ${file.name}`; caption.textContent = label;
+        try { img.src = makeUrl(await browserPreview(source, sourceName)); }
+        catch (error) { caption.textContent = `${label}: pratinjau gagal (${error.message}). Berkas hasil tetap dapat diunduh.`; }
         figure.append(img, caption); compare.append(figure);
-      });
+      }
       card.append(compare);
     }
     card.append(button);
@@ -99,7 +123,7 @@
         try {
           checkFile(file, extensions);
           const response = await request(path, file, settings), blob = await response.blob();
-          result.append(outputCard(file, blob, response, kind === 'image'));
+          result.append(await outputCard(file, blob, response, kind === 'image'));
         } catch (error) {
           const message = document.createElement('p'); message.className = 'notice'; message.textContent = `${file.name}: ${error.message}`; result.append(message);
         }
@@ -107,7 +131,7 @@
       status.textContent = 'Pemrosesan selesai. Periksa hasil sebelum mengunduh.'; submit.disabled = false;
     });
   }
-  setupBatch('image', '/api/image-compress', ['png', 'jpg', 'jpeg', 'webp'], () => ({
+  setupBatch('image', '/api/image-compress', ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'], () => ({
     width: Number($('image-width').value), height: Number($('image-height').value), quality: Number($('image-quality').value),
     format: $('image-format').value, keep_ratio: $('image-ratio').checked, remove_metadata: $('image-metadata').checked,
   }));
@@ -136,13 +160,13 @@
     cropped.getContext('2d').drawImage(canvas, left, top, right - left + 1, bottom - top + 1, 8, 8, right - left + 1, bottom - top + 1);
     return cropped;
   };
-  async function setSignature(blob) {
+  async function setSignature(blob, original = blob) {
     const url = makeUrl(blob), image = new Image(); image.src = url;
     try { await image.decode(); }
     catch { revoke(url); throw new Error('Gambar tanda tangan tidak dapat dibaca.'); }
     if (image.naturalWidth * image.naturalHeight > 2000000) { revoke(url); throw new Error('Tanda tangan maksimal 2 megapiksel.'); }
     revoke(signatureUrl); revoke(whitePreviewUrl); whitePreviewUrl = null;
-    signature = blob; signatureUrl = url; signatureAspect = image.naturalWidth / image.naturalHeight;
+    signature = original; signatureUrl = url; signatureAspect = image.naturalWidth / image.naturalHeight;
     const previewCanvas = document.createElement('canvas'); previewCanvas.width = image.naturalWidth; previewCanvas.height = image.naturalHeight;
     const previewCtx = previewCanvas.getContext('2d'); previewCtx.drawImage(image, 0, 0);
     const pixels = previewCtx.getImageData(0, 0, previewCanvas.width, previewCanvas.height);
@@ -159,7 +183,7 @@
     cropCanvas().toBlob((blob) => { if (blob) void setSignature(blob).catch((e) => { $('sign-status').textContent = e.message; }); }, 'image/png');
   });
   $('signature-file').addEventListener('change', async (event) => {
-    try { const file = event.target.files[0]; checkFile(file, ['png', 'jpg', 'jpeg', 'webp'], 1024 * 1024); await setSignature(file); }
+    try { const file = event.target.files[0]; checkFile(file, ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'], 1024 * 1024); await setSignature(await browserPreview(file, file.name, 2000000), file); }
     catch (error) { $('sign-status').textContent = error.message; }
   });
 
@@ -258,7 +282,7 @@
     loading = true; updateEditor(); $('sign-status').textContent = 'Menempatkan tanda tangan dan menyiapkan PDF…';
     try {
       const response = await request('/api/pdf-sign', file, settings, new Blob([file, source])); const result = await response.blob();
-      const name = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'privasidoc-tanda-tangan.pdf';
+      const name = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'privasiguard-tanda-tangan.pdf';
       const info = JSON.parse(response.headers.get('X-Document-Info'));
       $('sign-status').textContent = `PDF siap · ${info.signatures} tanda tangan visual · ${bytesLabel(result.size)}.`;
       const button = document.createElement('button'); button.className = 'secondary-button'; button.type = 'button'; button.textContent = '↓ Unduh PDF';

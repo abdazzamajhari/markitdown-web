@@ -106,7 +106,7 @@ def test_home_and_configuration(client, monkeypatch):
     assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4.1-flash:netra"}
     monkeypatch.setenv("DEEPSEEK_API_KEY", "ignored-key")
     assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4.1-flash:netra"}
-    assert "PrivasiDoc" in client.get("/").text
+    assert "PrivasiGuard" in client.get("/").text
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
 
 

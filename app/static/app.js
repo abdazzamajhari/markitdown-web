@@ -11,20 +11,42 @@ const externalAi = document.querySelector('#external-ai');
 const queue = [];
 const completed = [];
 const objectUrls = new Set();
-const supported = new Set(['pdf', 'docx', 'pptx', 'xlsx', 'txt', 'csv', 'json', 'png', 'jpg', 'jpeg', 'webp']);
-const imageFormats = new Set(['png', 'jpg', 'jpeg', 'webp']);
+const imageFormats = new Set(['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff']);
+const categoryFormats = {image: imageFormats, pdf: new Set(['pdf']), document: new Set(['docx', 'pptx', 'xlsx', 'txt', 'csv', 'json'])};
+const categoryCounts = {image: {failed: 0, skipped: 0}, pdf: {failed: 0, skipped: 0}, document: {failed: 0, skipped: 0}};
 const maxBytes = 10 * 1024 * 1024;
 let running = false;
-let failed = 0;
-let skipped = 0;
+let activeItem = null;
+let ocrCategory = 'image';
+const categoryRecords = () => completed.filter((record) => record.category === ocrCategory);
+
+window.setOcrCategory = (category) => {
+  ocrCategory = category;
+  picker.accept = [...categoryFormats[category]].map((ext) => `.${ext}`).join(',');
+  const copy = {
+    image: ['GAMBAR → MARKDOWN', 'Ekstrak teks dari gambar', 'Unggah gambar atau screenshot. Periksa teks dan kotak OCR, lalu unduh hasil Markdown.', 'PNG, JPEG, WebP, TIFF satu halaman · hingga 10 MB dan 8 megapiksel per gambar.'],
+    pdf: ['PDF → MARKDOWN', 'Ekstrak teks dari halaman PDF', 'Setiap halaman PDF dirender menjadi gambar penuh untuk OCR. Periksa halaman, kotak teks, dan urutan hasil sebelum mengunduh.', 'PDF · hingga 10 MB dan 30 halaman per berkas · jumlah PDF dalam antrean tidak dibatasi.'],
+    document: ['DOKUMEN → MARKDOWN', 'Ekstrak isi dokumen Anda', 'Unggah dokumen Office atau berkas teks. Lihat hasil ekstraksi dan unduh Markdown per berkas atau sekaligus.', 'DOCX, PPTX, XLSX, TXT, CSV, JSON · hingga 10 MB per berkas.'],
+  }[category];
+  ['ocr-eyebrow', 'page-title', 'ocr-description', 'upload-hint'].forEach((id, i) => { document.getElementById(id).textContent = copy[i]; });
+  document.getElementById('ocr-ai-options').hidden = category === 'document';
+  ocrMode.hidden = category === 'document';
+  document.getElementById('ocr-ai-label').textContent = category === 'pdf' ? 'Gunakan SumoPod AI untuk pemeriksaan bahasa hasil OCR PDF' : 'Gunakan SumoPod AI untuk OCR gambar';
+  document.getElementById('ocr-ai-hint').textContent = category === 'pdf' ? 'Saat aktif, hanya teks hasil OCR PDF dikirim ke SumoPod untuk pemeriksaan bahasa. OCR halaman tetap menggunakan Tesseract di server aplikasi.' : 'Saat aktif, gambar dikirim ke SumoPod. Saat nonaktif, OCR menggunakan Tesseract di server aplikasi.';
+  for (const row of list.children) row.hidden = row.dataset.category !== category;
+  notice.textContent = '';
+  updateStatus();
+};
 
 function formatBytes(bytes) {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 function updateStatus() {
-  const waiting = queue.length + Number(running);
-  status.textContent = `${completed.length} selesai · ${skipped} dilewati · ${failed} gagal · ${waiting} dalam antrean/proses`;
-  downloadAll.disabled = downloadCombined.disabled = !completed.length;
+  const waiting = queue.filter((item) => item.category === ocrCategory).length + Number(activeItem?.category === ocrCategory);
+  const {failed, skipped} = categoryCounts[ocrCategory];
+  status.textContent = `${categoryRecords().length} selesai · ${skipped} dilewati · ${failed} gagal · ${waiting} dalam antrean/proses`;
+  downloadAll.disabled = downloadCombined.disabled = !categoryRecords().length;
+  emptyState.hidden = [...list.children].some((row) => row.dataset.category === ocrCategory);
 }
 function saveBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -44,6 +66,7 @@ function makeRow(file) {
   const extension = file.name.split('.').pop().toLowerCase();
   const row = document.createElement('li');
   row.className = 'file-row';
+  row.dataset.category = ocrCategory;
   const head = document.createElement('div');
   head.className = 'file-head';
   const icon = document.createElement('span');
@@ -66,32 +89,33 @@ function makeRow(file) {
   progress.setAttribute('aria-label', `Progres ${file.name}`);
   row.append(head, progress);
   list.append(row);
-  return {row, state, progress, file, extension, externalAi: externalAi.checked};
+  return {row, state, progress, file, extension, category: ocrCategory, externalAi: ocrCategory !== 'document' && externalAi.checked};
 }
 function markError(item, message) {
   item.row.classList.add('error');
   item.state.textContent = message;
   item.progress.value = 0;
-  failed += 1;
+  categoryCounts[item.category].failed += 1;
   updateStatus();
 }
 function markSkipped(item, message) {
   item.state.textContent = message;
   item.progress.value = 0;
-  skipped += 1;
+  categoryCounts[item.category].skipped += 1;
   updateStatus();
 }
 function addFiles(files) {
   const selected = Array.from(files);
   if (!selected.length) return;
+  let rejected = 0;
   for (const file of selected) {
+    if (!categoryFormats[ocrCategory].has(file.name.split('.').pop().toLowerCase())) { rejected += 1; continue; }
     const item = makeRow(file);
-    if (!supported.has(item.extension)) markError(item, 'Format tidak didukung');
-    else if (!file.size || file.size > maxBytes) markError(item, 'Ukuran harus 1 byte–10 MB');
+    if (!file.size || file.size > maxBytes) markError(item, 'Ukuran harus 1 byte–10 MB');
     else queue.push(item);
   }
   updateStatus();
-  notice.textContent = '';
+  notice.textContent = rejected ? `${rejected} berkas tidak sesuai kategori terpilih. Pilih kategori Gambar, PDF, atau Dokumen lainnya yang sesuai.` : '';
   void processQueue();
 }
 function upload(item) {
@@ -237,12 +261,19 @@ function renderDetail(item, markdown, engine, record) {
     loadRegions = async () => {
       if (loaded || loading) return;
       loading = true;
-      if (!image.src) {
-        image.src = URL.createObjectURL(item.file);
-        objectUrls.add(image.src);
-      }
       regionMessage.textContent = 'Memetakan lokasi teks OCR…';
       try {
+        if (!image.src) {
+          let preview = item.file;
+          if (['tif', 'tiff'].includes(item.extension)) {
+            const response = await fetch('/api/image-preview', {method: 'POST', body: item.file,
+              headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream'}});
+            if (!response.ok) throw new Error((await response.json()).detail || 'Pratinjau TIFF gagal');
+            preview = await response.blob();
+          }
+          image.src = URL.createObjectURL(preview);
+          objectUrls.add(image.src);
+        }
         const response = await fetch('/api/regions', {
           method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream', ...(item.externalAi && externalAi.checked ? {'X-External-AI': 'true'} : {})},
           body: item.file,
@@ -394,7 +425,7 @@ function renderDetail(item, markdown, engine, record) {
         completed.push(record);
         if (item.row.classList.contains('error')) {
           item.row.classList.remove('error');
-          failed = Math.max(0, failed - 1);
+          categoryCounts[item.category].failed = Math.max(0, categoryCounts[item.category].failed - 1);
         }
         item.row.classList.add('done');
         item.state.textContent = `Selesai · ${transcriptEngine} ${totalPages} halaman`;
@@ -619,7 +650,7 @@ function renderDetail(item, markdown, engine, record) {
   const note = document.createElement('p');
   note.className = 'detail-note';
   note.textContent = imageFormats.has(item.extension)
-    ? 'Transkripsi dan lokasi kotak berasal dari DeepSeek V4.1 Flash · Netra. Kotak dapat tidak lengkap bila model tidak memberikan koordinat.'
+    ? (item.externalAi ? 'Transkripsi dan lokasi kotak berasal dari DeepSeek V4.1 Flash · Netra. Periksa kembali teks dan lokasi kotak pada gambar.' : 'Transkripsi dan lokasi kotak berasal dari Tesseract lokal di server aplikasi. Periksa kembali teks dan lokasi kotak pada gambar.')
     : item.extension === 'pdf'
       ? 'Setiap halaman PDF dirender menjadi gambar penuh lalu dibaca oleh OCR lokal. Periksa kembali nama, angka, dan tabel sebelum menggunakan hasilnya.'
     : 'Pratinjau ini memperlihatkan seluruh Markdown yang dihasilkan. Unduhan per berkas dan unduhan massal tersedia di atas.';
@@ -636,6 +667,7 @@ async function processQueue() {
   running = true;
   while (queue.length) {
     const item = queue.shift();
+    activeItem = item;
     item.state.textContent = 'Mengunggah…';
     updateStatus();
     try {
@@ -653,7 +685,7 @@ async function processQueue() {
       const label = engine === 'tesseract' ? 'Tesseract lokal' : engine === 'deepseek-v4.1-flash:netra' ? 'DeepSeek V4.1 Flash · Netra' : 'MarkItDown';
       item.state.textContent = item.extension === 'pdf' ? 'Menyiapkan OCR halaman PDF…' :
         markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
-      const record = {name: item.file.name, markdown};
+      const record = {name: item.file.name, markdown, category: item.category};
       emptyState.hidden = true;
       const loadRegions = renderDetail(item, markdown, engine, record);
       updateStatus();
@@ -671,16 +703,17 @@ async function processQueue() {
     updateStatus();
   }
   running = false;
+  activeItem = null;
   updateStatus();
 }
 
 downloadAll.addEventListener('click', () => {
-  try { saveBlob(createMarkdownZip(completed), 'privasidoc-hasil.zip'); }
+  try { saveBlob(createMarkdownZip(categoryRecords()), `privasiguard-${ocrCategory}-hasil.zip`); }
   catch { notice.textContent = 'Gagal menyiapkan ZIP. Coba unduh hasil per berkas.'; }
 });
 downloadCombined.addEventListener('click', () => {
-  const text = completed.map(({name, markdown}) => `# ${name.replace(/[\r\n]/g, ' ')}\n\n${markdown}`).join('\n\n---\n\n');
-  saveBlob(new Blob([text], {type: 'text/markdown;charset=utf-8'}), 'privasidoc-gabungan.md');
+  const text = categoryRecords().map(({name, markdown}) => `# ${name.replace(/[\r\n]/g, ' ')}\n\n${markdown}`).join('\n\n---\n\n');
+  saveBlob(new Blob([text], {type: 'text/markdown;charset=utf-8'}), `privasiguard-${ocrCategory}-gabungan.md`);
 });
 for (const box of document.querySelectorAll('.demo-box')) {
   box.addEventListener('click', () => {

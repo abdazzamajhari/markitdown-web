@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'">
-  <meta name="description" content="PrivasiDoc: ekstraksi teks, kompresi gambar dan PDF, resize piksel, dan editor tanda tangan dengan kontrol pengiriman AI.">
-  <title>PrivasiDoc · Kendali dokumen dan data pribadi</title>
+  <meta name="description" content="PrivasiGuard: alat gambar, PDF, dan dokumen dengan kontrol privasi. OCR, kompresi, resize piksel, dukungan TIFF, dan tanda tangan PDF.">
+  <title>PrivasiGuard · Kendali berkas dan data pribadi</title>
   <link rel="stylesheet" href="/static/style.css">
   <script defer src="/static/zip.js"></script>
   <script defer src="/static/app.js"></script>
@@ -15,24 +15,32 @@
 <body>
   <main class="wrap">
     <header class="site-header">
-      <div class="brand"><span class="mark" aria-hidden="true">P<span>◆</span></span><span>Privasi<strong>Doc</strong></span></div>
+      <div class="brand"><span class="mark" aria-hidden="true">P<span>◆</span></span><span>Privasi<strong>Guard</strong></span></div>
       <div class="header-actions"><span class="header-badge"><span class="status-dot" aria-hidden="true"></span> Dokumen dalam kendali Anda</span><button class="small-button" id="clear-session" type="button">Bersihkan sesi</button></div>
     </header>
 
     <section class="suite-intro"><p class="eyebrow">PENGELOLAAN DOKUMEN & PELINDUNGAN DATA PRIBADI</p><h1>Lebih ringkas.<br><em>Lebih terkendali.</em></h1><p class="lead">Ekstrak teks, perkecil berkas, atur ukuran gambar, dan letakkan tanda tangan pada PDF dalam satu ruang kerja.</p></section>
     <div class="privacy-strip"><span>◆ Pemrosesan di server aplikasi</span><span>◇ Hapus metadata saat ekspor</span><span>↗ AI eksternal sesuai pilihan</span></div>
-    <nav class="tool-tabs" aria-label="Fitur dokumen">
-      <button type="button" class="active" data-tool="ocr" aria-pressed="true">01 <span>Ekstraksi teks</span></button>
-      <button type="button" data-tool="image" aria-pressed="false">02 <span>Kompresi & resize</span></button>
-      <button type="button" data-tool="compress" aria-pressed="false">03 <span>Kompresi PDF</span></button>
-      <button type="button" data-tool="sign" aria-pressed="false">04 <span>Tanda tangan PDF</span></button>
+    <nav class="category-tabs" aria-label="Kategori berkas">
+      <button type="button" class="active" data-category-select="image" aria-pressed="true"><span class="category-symbol" aria-hidden="true">▧</span><span><strong>Gambar</strong><small>OCR · kompresi · resize · TIFF</small></span></button>
+      <button type="button" data-category-select="pdf" aria-pressed="false"><span class="category-symbol" aria-hidden="true">▤</span><span><strong>PDF</strong><small>OCR halaman · kompresi · tanda tangan</small></span></button>
+      <button type="button" data-category-select="document" aria-pressed="false"><span class="category-symbol" aria-hidden="true">▥</span><span><strong>Dokumen lainnya</strong><small>Word · PowerPoint · Excel · teks</small></span></button>
+    </nav>
+    <p id="category-description" class="category-description">Alat untuk gambar PNG, JPEG, WebP, dan TIFF satu halaman.</p>
+    <nav class="tool-tabs" aria-label="Fitur kategori terpilih">
+      <button type="button" class="active" data-category="image" data-tool="ocr" aria-pressed="true">01 <span>OCR gambar</span></button>
+      <button type="button" data-category="image" data-tool="image" aria-pressed="false">02 <span>Kompresi & resize gambar</span></button>
+      <button type="button" data-category="pdf" data-tool="ocr" aria-pressed="false" hidden>01 <span>OCR PDF</span></button>
+      <button type="button" data-category="pdf" data-tool="compress" aria-pressed="false" hidden>02 <span>Kompresi PDF</span></button>
+      <button type="button" data-category="pdf" data-tool="sign" aria-pressed="false" hidden>03 <span>Tanda tangan PDF</span></button>
+      <button type="button" data-category="document" data-tool="ocr" aria-pressed="false" hidden>01 <span>Ekstraksi dokumen</span></button>
     </nav>
     <div id="tool-ocr" class="tool-panel">
     <section class="hero" aria-labelledby="page-title">
       <div class="hero-copy">
-        <p class="eyebrow">DOKUMEN → MARKDOWN</p>
-        <h2 id="page-title">Teks dari setiap halaman,<br>siap digunakan.</h2>
-        <p class="lead">Letakkan beberapa dokumen atau screenshot. Lihat hasil ekstraksi per berkas, periksa lokasi teks pada gambar, lalu unduh satu atau semua hasil.</p>
+        <p id="ocr-eyebrow" class="eyebrow">GAMBAR → MARKDOWN</p>
+        <h2 id="page-title">Ekstrak teks dari gambar</h2>
+        <p id="ocr-description" class="lead">Unggah gambar atau screenshot. Periksa teks dan kotak OCR, lalu unduh hasil Markdown.</p>
         <div class="hero-points"><span>✦ Banyak berkas</span><span>✦ Pratinjau teks</span><span>✦ Unduh sekaligus</span></div>
       </div>
       <div class="upload-card">
@@ -42,10 +50,10 @@
           <span>atau klik untuk memilih beberapa berkas</span>
           <span class="drop-action" aria-hidden="true">Pilih berkas <span>↗</span></span>
         </button>
-        <input id="picker" type="file" accept=".pdf,.docx,.pptx,.xlsx,.txt,.csv,.json,.png,.jpg,.jpeg,.webp" multiple hidden>
-        <p id="upload-hint" class="hint">PNG, JPG, WebP, PDF, DOCX, PPTX, XLSX, TXT, CSV, JSON · hingga 10 MB per berkas · PDF maksimal 30 halaman · jumlah PDF dalam antrean tidak dibatasi.</p>
+        <input id="picker" type="file" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff" multiple hidden>
+        <p id="upload-hint" class="hint">PNG, JPEG, WebP, TIFF satu halaman · hingga 10 MB dan 8 megapiksel per gambar.</p>
         <p id="ocr-mode" class="ocr-mode" role="status">Memeriksa layanan OCR…</p>
-        <label class="check-line consent"><input type="checkbox" id="external-ai"> Gunakan SumoPod AI untuk OCR gambar dan pemeriksaan bahasa PDF</label><p class="hint">Saat aktif, gambar terpisah dan teks OCR PDF dikirim ke SumoPod. Saat nonaktif, OCR berjalan dengan Tesseract di server aplikasi.</p>
+        <div id="ocr-ai-options"><label class="check-line consent"><input type="checkbox" id="external-ai"> <span id="ocr-ai-label">Gunakan SumoPod AI untuk OCR gambar</span></label><p id="ocr-ai-hint" class="hint">Saat aktif, gambar dikirim ke SumoPod. Saat nonaktif, OCR menggunakan Tesseract di server aplikasi.</p></div>
       </div>
     </section>
 
@@ -77,15 +85,15 @@
     <section id="tool-image" class="tool-panel results" hidden aria-labelledby="image-title">
       <p class="eyebrow">GAMBAR · TANPA PENGIRIMAN KE AI</p><h2 id="image-title">Kompresi & resize gambar</h2><p class="tool-description">Atur lebar dan tinggi dalam piksel, kualitas, dan format keluaran. Bandingkan ukuran hasil sebelum mengunduh.</p>
       <form id="image-form" class="tool-form">
-        <label class="upload-field">Pilih gambar<input id="image-files" type="file" accept=".png,.jpg,.jpeg,.webp" multiple required><small>PNG, JPEG, WebP · maksimal 10 MB dan 24 megapiksel per gambar</small></label>
+        <label class="upload-field">Pilih gambar<input id="image-files" type="file" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff" multiple required><small>PNG, JPEG, WebP, TIFF satu halaman · maksimal 10 MB dan 24 megapiksel per gambar</small></label>
         <div class="settings-grid">
           <label>Lebar (px)<input id="image-width" type="number" min="1" max="12000" placeholder="Ukuran asli"></label>
           <label>Tinggi (px)<input id="image-height" type="number" min="1" max="12000" placeholder="Otomatis"></label>
-          <label>Format<select id="image-format"><option value="webp">WebP</option><option value="jpeg">JPEG</option><option value="png">PNG (lossless)</option></select></label>
+          <label>Format<select id="image-format"><option value="webp">WebP</option><option value="jpeg">JPEG</option><option value="png">PNG (lossless)</option><option value="tiff">TIFF (LZW lossless)</option></select></label>
           <label>Kualitas <output id="image-quality-value">80</output><input id="image-quality" type="range" min="20" max="95" value="80"></label>
         </div>
         <div class="option-row"><label class="check-line"><input id="image-ratio" type="checkbox" checked>Pertahankan rasio gambar</label><label class="check-line"><input id="image-metadata" type="checkbox" checked>Hapus metadata EXIF & profil warna</label></div>
-        <p class="hint">Kosongkan ukuran untuk mempertahankan dimensi. Dengan rasio aktif, gambar masuk ke batas lebar/tinggi yang dipilih. PNG memakai kompresi tanpa kehilangan kualitas; pengaturan kualitas berlaku untuk JPEG/WebP.</p>
+        <p class="hint">Kosongkan ukuran untuk mempertahankan dimensi. Dengan rasio aktif, gambar masuk ke batas lebar/tinggi yang dipilih. PNG dan TIFF memakai kompresi lossless setelah konversi ke RGB/RGBA; gambar 16-bit/CMYK dikonversi ke 8-bit RGB/RGBA. Kualitas berlaku untuk JPEG/WebP. TIFF multipage belum didukung.</p>
         <button type="submit" class="primary-button">Proses gambar</button><p id="image-status" class="tool-status" role="status" aria-live="polite"></p>
       </form><div id="image-results" class="tool-results"></div>
     </section>
@@ -108,7 +116,7 @@
       <div class="editor-layout">
         <div class="editor-settings">
           <label class="upload-field">Dokumen PDF<input id="sign-file" type="file" accept=".pdf"><small>Maksimal 10 MB · 30 halaman</small></label>
-          <label class="upload-field">Unggah gambar tanda tangan<input id="signature-file" type="file" accept=".png,.jpg,.jpeg,.webp"><small>Maksimal 1 MB · 2 megapiksel</small></label>
+          <label class="upload-field">Unggah gambar tanda tangan<input id="signature-file" type="file" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff"><small>PNG, JPEG, WebP, TIFF satu halaman · maksimal 1 MB · 2 megapiksel</small></label>
           <p class="field-caption">Atau gambar tanda tangan di bawah</p><canvas id="signature-canvas" width="800" height="280" aria-label="Area menggambar tanda tangan"></canvas>
           <div class="option-row"><button id="signature-clear" type="button" class="small-button">Hapus goresan</button><button id="signature-use" type="button" class="small-button">Gunakan goresan</button></div>
           <label class="check-line"><input id="signature-white" type="checkbox">Hilangkan latar hampir putih</label>
@@ -123,7 +131,7 @@
         <div class="editor-preview"><div class="page-controls"><button id="sign-prev" type="button" disabled>← Sebelumnya</button><span id="sign-page-label">Halaman —</span><button id="sign-next" type="button" disabled>Berikutnya →</button></div><p class="hint editor-help">Klik tanda tangan untuk memilih. Geser kotaknya atau gunakan X/Y untuk mengatur posisi. Ukuran mengikuti rasio gambar.</p><div class="editor-scroll"><div id="sign-stage" class="sign-stage"><img id="sign-page" alt="Pratinjau halaman PDF" hidden><div id="signature-layer"></div></div><p id="sign-empty" class="editor-empty">Pratinjau dokumen akan muncul di sini.</p></div></div>
       </div>
     </section>
-    <footer><strong>PrivasiDoc.</strong> Unggahan diproses di memori server dan tidak disimpan sebagai arsip permanen oleh aplikasi. Kompresi/resize dan tanda tangan tidak memakai AI eksternal. Metadata yang dihapus tidak mencakup data pribadi yang terlihat di isi dokumen. Gunakan “Bersihkan sesi” untuk melepas berkas dan hasil dari halaman ini. <a href="https://github.com/abdazzamajhari/markitdown-web" target="_blank" rel="noopener noreferrer">Kode sumber</a></footer>
+    <footer><strong>PrivasiGuard.</strong> Unggahan diproses di memori server dan tidak disimpan sebagai arsip permanen oleh aplikasi. Kompresi/resize dan tanda tangan tidak memakai AI eksternal. Metadata yang dihapus tidak mencakup data pribadi yang terlihat di isi dokumen. Gunakan “Bersihkan sesi” untuk melepas berkas dan hasil dari halaman ini. <a href="https://github.com/abdazzamajhari/markitdown-web" target="_blank" rel="noopener noreferrer">Kode sumber</a></footer>
   </main>
 </body>
 </html>

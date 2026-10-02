@@ -38,11 +38,21 @@ def read_image(data, limit=MAX_PIXELS):
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         try:
             with Image.open(io.BytesIO(data)) as image:
-                if image.format not in {"PNG", "JPEG", "WEBP"} or getattr(image, "n_frames", 1) != 1:
-                    raise ToolError(415, "Gunakan gambar PNG, JPEG, atau WebP statis")
+                if image.format not in {"PNG", "JPEG", "WEBP", "TIFF"}:
+                    raise ToolError(415, "Gunakan gambar PNG, JPEG, WebP, atau TIFF")
+                if getattr(image, "n_frames", 1) != 1:
+                    raise ToolError(415, "Gunakan gambar statis satu halaman; TIFF multipage belum didukung")
                 if image.width * image.height > limit:
                     raise ToolError(413, "Resolusi gambar melebihi batas piksel")
-                return ImageOps.exif_transpose(image).copy()
+                # Pillow's TIFF pixel copy does not retain its IFD metadata.
+                exif = image.getexif()
+                normalized = ImageOps.exif_transpose(image).copy()
+                if image.format == "TIFF":
+                    if 274 in exif:
+                        del exif[274]
+                    if exif:
+                        normalized.info["exif"] = exif.tobytes()
+                return normalized
         except (Image.DecompressionBombError, Image.DecompressionBombWarning):
             raise ToolError(413, "Resolusi gambar melebihi batas piksel") from None
         except (OSError, ValueError):
@@ -65,7 +75,7 @@ def compress_image(data, options):
     keep_ratio = flag(options, "keep_ratio")
     remove_metadata = flag(options, "remove_metadata")
     fmt = options.get("format", "webp")
-    if fmt not in {"jpeg", "png", "webp"}:
+    if fmt not in {"jpeg", "png", "webp", "tiff"}:
         raise ToolError(400, "Format keluaran tidak valid")
     if keep_ratio or not (width and height):
         scale = min([v / original[i] for i, v in enumerate((width, height)) if v] or [1])
@@ -81,8 +91,13 @@ def compress_image(data, options):
     clean.paste(image.convert(clean.mode))
     params = {}
     if not remove_metadata:
-        if image.getexif():
-            params["exif"] = image.getexif().tobytes()
+        exif = image.getexif()
+        # TIFF storage/layout tags must describe the newly encoded pixels.
+        for tag in (256, 257, 258, 259, 262, 273, 277, 278, 279, 284, 317, 322, 323, 324, 325, 338, 339):
+            if tag in exif:
+                del exif[tag]
+        if exif:
+            params["exif"] = exif.tobytes()
         if image.info.get("icc_profile"):
             params["icc_profile"] = image.info["icc_profile"]
     out = io.BytesIO()
@@ -92,10 +107,26 @@ def compress_image(data, options):
         rgb.save(out, "JPEG", quality=quality, optimize=True, progressive=True, **params)
     elif fmt == "webp":
         clean.save(out, "WEBP", quality=quality, method=4, **params)
+    elif fmt == "tiff":
+        clean.save(out, "TIFF", compression="tiff_lzw", **params)
     else:
         clean.save(out, "PNG", optimize=True, compress_level=9, **params)
     return pack(out.getvalue(), {"format": fmt, "original_pixels": original, "pixels": list(size),
                                  "metadata_removed": remove_metadata})
+
+
+def image_preview(data, options):
+    # Return browser-readable pixels without source metadata or network calls.
+    limit = number(options, "max_pixels", MAX_PIXELS, 1, MAX_PIXELS, True)
+    image = read_image(data, limit)
+    original = list(image.size)
+    image.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+    clean = Image.new("RGBA" if "A" in image.getbands() else "RGB", image.size)
+    clean.paste(image.convert(clean.mode))
+    out = io.BytesIO()
+    clean.save(out, "PNG", optimize=True)
+    return pack(out.getvalue(), {"format": "png", "original_pixels": original,
+                                "pixels": list(image.size), "metadata_removed": True})
 
 
 def open_pdf(data, editing=True):
@@ -254,5 +285,5 @@ def execute(data, mode):
         raise ToolError(400, "Pengaturan tidak valid") from None
     if not isinstance(options, dict):
         raise ToolError(400, "Pengaturan tidak valid")
-    return {"tool-image": compress_image, "tool-compress": compress_pdf,
+    return {"tool-image": compress_image, "tool-image-preview": image_preview, "tool-compress": compress_pdf,
             "tool-preview": pdf_preview, "tool-sign": sign_pdf}[operation](data, options)

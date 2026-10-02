@@ -10,7 +10,8 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
-IMAGE_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
+IMAGE_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP",
+                    ".tif": "TIFF", ".tiff": "TIFF"}
 MAX_IMAGE_PIXELS = 8_000_000
 MAX_PDF_PAGES = 30
 
@@ -21,8 +22,10 @@ def prepare_image(data: bytes, extension: str) -> tuple[int, bytes]:
     Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
     try:
         with Image.open(io.BytesIO(data)) as image:
-            if image.format != IMAGE_EXTENSIONS[extension] or getattr(image, "n_frames", 1) != 1:
+            if image.format != IMAGE_EXTENSIONS[extension]:
                 return 5, b""
+            if getattr(image, "n_frames", 1) != 1:
+                return (10 if image.format == "TIFF" else 5), b""
             if image.width * image.height > MAX_IMAGE_PIXELS:
                 return 4, b""
             # Normalize orientation, flatten transparency, and strip metadata.

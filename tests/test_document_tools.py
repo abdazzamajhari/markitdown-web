@@ -58,12 +58,14 @@ def pdf_bytes(rotation=0, crop=False, photo=False):
 
 def test_image_resize_formats_and_metadata(client):
     original = image_bytes(metadata=True)
-    for fmt in ("webp", "jpeg", "png"):
+    for fmt in ("webp", "jpeg", "png", "tiff"):
         response = upload(client, "/api/image-compress", original, {"format": fmt, "width": 200, "height": 200}, "photo.png")
         assert response.status_code == 200, response.text
         with Image.open(io.BytesIO(response.content)) as image:
             assert image.size == (200, 100)
-            assert not image.getexif()
+            assert 315 not in image.getexif()
+            if fmt != "tiff":
+                assert not image.getexif()
             assert "icc_profile" not in image.info
         assert response.headers["cache-control"] == "no-store"
         assert response.headers["x-content-type-options"] == "nosniff"
@@ -71,6 +73,78 @@ def test_image_resize_formats_and_metadata(client):
     assert Image.open(io.BytesIO(exact.content)).size == (200, 200)
     height_only = upload(client, "/api/image-compress", original, {"height": 100}, "photo.png")
     assert Image.open(io.BytesIO(height_only.content)).size == (200, 100)
+
+
+@pytest.mark.parametrize("extension", ["tif", "tiff"])
+@pytest.mark.parametrize("byteorder", ["<", ">"])
+def test_tiff_input_resize_lossless_preview_and_metadata(client, extension, byteorder):
+    image = Image.new("RGB", (800, 400), (30, 60, 90)) if byteorder == "<" else Image.frombytes("I;16B", (800, 400), b"\x00\x3c" * 800 * 400)
+    buf = io.BytesIO()
+    image.save(buf, "TIFF", tiffinfo={315: "Private TIFF author", 270: "Private description"})
+    original = buf.getvalue()
+    assert original[:2] == (b"II" if byteorder == "<" else b"MM")
+    name = f"scan.{extension}"
+    response = upload(client, "/api/image-compress", original, {"format": "tiff", "width": 200}, name)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "image/tiff"
+    assert response.headers["content-disposition"].endswith('.tiff"')
+    assert len(response.content) < len(original)
+    with Image.open(io.BytesIO(response.content)) as result:
+        assert result.format == "TIFF" and result.size == (200, 100)
+        assert result.tag_v2[259] == 5  # LZW
+        assert 315 not in result.getexif() and 270 not in result.getexif()
+        assert result.getpixel((100, 50)) == ((30, 60, 90) if byteorder == "<" else (60, 60, 60))
+    preview = upload(client, "/api/image-preview", original, {}, name)
+    assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store"
+    with Image.open(io.BytesIO(preview.content)) as result:
+        assert result.format == "PNG" and result.size == (800, 400)
+        assert not result.getexif()
+    keep = upload(client, "/api/image-compress", original, {"format": "tiff", "width": 100, "remove_metadata": False}, name)
+    assert keep.status_code == 200, keep.text
+    with Image.open(io.BytesIO(keep.content)) as result:
+        assert result.size == (100, 50) and result.getexif()[315] == "Private TIFF author"
+    converted = upload(client, "/api/image-compress", original, {"format": "webp", "width": 200}, name)
+    assert converted.status_code == 200
+    assert Image.open(io.BytesIO(converted.content)).size == (200, 100)
+
+
+def test_tiff_orientation_alpha_ocr_and_signature(client):
+    image = Image.new("RGBA", (700, 200), (255, 255, 255, 0))
+    ImageDraw.Draw(image).text((30, 30), "PRIVATE TIFF TEXT", fill=(0, 0, 0, 255), font_size=32)
+    buf = io.BytesIO(); image.save(buf, "TIFF", compression="tiff_lzw")
+    original = buf.getvalue()
+    preview = upload(client, "/api/image-preview", original, {}, "signature.tiff")
+    assert preview.status_code == 200, preview.text
+    assert Image.open(io.BytesIO(preview.content)).getpixel((0, 0))[3] == 0
+    ocr = client.post("/api/convert", content=original, headers={"X-Filename": "scan.tiff"})
+    assert ocr.status_code == 200 and "PRIVATE" in ocr.text
+    assert ocr.headers["x-ocr-engine"] == "tesseract"
+    regions = client.post("/api/regions", content=original, headers={"X-Filename": "scan.tif"})
+    assert regions.status_code == 200 and regions.json()["regions"]
+    pdf = pdf_bytes()
+    signed = upload(client, "/api/pdf-sign", pdf + original, {"pdf_size": len(pdf), "placements": [{"page": 1, "x": .1, "y": .5, "w": .4, "h": .1}]})
+    assert signed.status_code == 200, signed.text
+    assert fitz.open(stream=signed.content, filetype="pdf").page_count == 2
+    oriented = Image.new("RGB", (120, 60), "white")
+    buf = io.BytesIO(); oriented.save(buf, "TIFF", tiffinfo={274: 6, 315: "Author"})
+    response = upload(client, "/api/image-compress", buf.getvalue(), {"format": "tiff", "remove_metadata": False}, "oriented.tiff")
+    assert response.status_code == 200, response.text
+    result = Image.open(io.BytesIO(response.content))
+    assert result.size == (60, 120) and result.getexif()[315] == "Author"
+    assert 274 not in result.getexif()
+
+
+def test_tiff_multipage_and_invalid_content_are_refused(client):
+    image = Image.new("RGB", (100, 50), "white")
+    buf = io.BytesIO(); image.save(buf, "TIFF", save_all=True, append_images=[image])
+    original = buf.getvalue()
+    for path in ("/api/image-compress", "/api/image-preview"):
+        response = upload(client, path, original, {}, "multipage.tiff")
+        assert response.status_code == 415 and "multipage" in response.json()["detail"]
+    ocr = client.post("/api/convert", content=original, headers={"X-Filename": "multipage.tiff"})
+    assert ocr.status_code == 415 and "multipage" in ocr.json()["detail"]
+    assert upload(client, "/api/image-compress", image_bytes(), {}, "fake.tiff").status_code == 415
+    assert upload(client, "/api/image-preview", image_bytes((100, 50)), {"max_pixels": 1000}, "a.png").status_code == 413
 
 
 def test_transparency_orientation_and_metadata_opt_out(client):

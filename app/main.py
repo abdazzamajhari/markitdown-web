@@ -23,7 +23,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 ROOT = Path(__file__).resolve().parent
-IMAGE_FORMATS = {".png": b"\x89PNG\r\n\x1a\n", ".jpg": b"\xff\xd8\xff", ".jpeg": b"\xff\xd8\xff", ".webp": b"RIFF"}
+IMAGE_FORMATS = {".png": (b"\x89PNG\r\n\x1a\n",), ".jpg": (b"\xff\xd8\xff",),
+                 ".jpeg": (b"\xff\xd8\xff",), ".webp": (b"RIFF",),
+                 ".tif": (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"),
+                 ".tiff": (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")}
 ALLOWED = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".csv", ".json", *IMAGE_FORMATS}
 OFFICE_MARKERS = {
     ".docx": "word/document.xml",
@@ -53,7 +56,7 @@ REGIONS_PROMPT = (
     "Omit areas whose coordinates are uncertain."
 )
 
-app = FastAPI(title="PrivasiDoc", version="2.0.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="PrivasiGuard", version="2.1.0", docs_url=None, redoc_url=None)
 slots = asyncio.Semaphore(1)
 quota_lock = asyncio.Lock()
 recent_requests: deque[float] = deque()
@@ -135,6 +138,8 @@ def run_worker(data: bytes, extension: str, mode: str | None = None, timeout: in
         raise HTTPException(413, "Resolusi gambar melebihi 8 megapiksel")
     if proc.returncode == 5:
         raise HTTPException(415, "Gambar tidak valid atau formatnya tidak sesuai")
+    if proc.returncode == 10:
+        raise HTTPException(415, "TIFF multipage belum didukung; gunakan TIFF satu halaman")
     if proc.returncode == 8:
         raise HTTPException(413, "Dilewati: PDF melebihi 30 halaman")
     if proc.returncode == 7:
@@ -673,7 +678,8 @@ def tool_download(output, name, suffix):
         binary = output[4 + size:]
         fmt = info["format"]
         mime, ext = {"pdf": ("application/pdf", "pdf"), "jpeg": ("image/jpeg", "jpg"),
-                     "png": ("image/png", "png"), "webp": ("image/webp", "webp")}[fmt]
+                     "png": ("image/png", "png"), "webp": ("image/webp", "webp"),
+                     "tiff": ("image/tiff", "tiff")}[fmt]
     except (ValueError, KeyError, TypeError):
         raise HTTPException(502, "Hasil pemrosesan tidak valid") from None
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(name).stem)[:70] or "document"
@@ -687,6 +693,13 @@ async def image_compress(request: Request):
     name, extension, data, options = await read_tool_upload(request, IMAGE_FORMATS)
     output = await offline_tool(data, extension, "tool-image", options)
     return tool_download(output, name, "privasi")
+
+
+@app.post("/api/image-preview")
+async def image_preview(request: Request):
+    name, extension, data, options = await read_tool_upload(request, IMAGE_FORMATS)
+    output = await offline_tool(data, extension, "tool-image-preview", options)
+    return tool_download(output, name, "preview")
 
 
 @app.post("/api/pdf-compress")
