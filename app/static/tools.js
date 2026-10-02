@@ -236,12 +236,19 @@
     selected.h = selected.w * ratio; selected.x = Math.min(selected.x, 1 - selected.w); selected.y = Math.min(selected.y, 1 - selected.h);
     renderPlacements(); updateEditor();
   });
-  ['x', 'y'].forEach((axis) => $('signature-' + axis).addEventListener('change', () => {
-    if (!selected) return;
-    const value = Number($('signature-' + axis).value);
-    if (!Number.isFinite(value)) return;
-    selected[axis] = clamp(value / 100, 0, 1 - selected[axis === 'x' ? 'w' : 'h']); renderPlacements(); updateEditor();
-  }));
+  ['x', 'y'].forEach((axis) => {
+    const field = $('signature-' + axis);
+    const move = () => {
+      if (!selected) return;
+      const value = Number(field.value);
+      if (!Number.isFinite(value)) return;
+      selected[axis] = clamp(value / 100, 0, 1 - selected[axis === 'x' ? 'w' : 'h']);
+      renderPlacements();
+    };
+    // Update on each edit; format only on blur so typing does not reset the caret.
+    field.addEventListener('input', move);
+    field.addEventListener('change', () => { move(); updateEditor(); });
+  });
   $('signature-remove').addEventListener('click', () => { placements = placements.filter((p) => p !== selected); selected = null; renderPlacements(); updateEditor(); });
   $('signature-white').addEventListener('change', renderPlacements);
   $('sign-export').addEventListener('click', async () => {
