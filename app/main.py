@@ -56,7 +56,7 @@ REGIONS_PROMPT = (
     "Omit areas whose coordinates are uncertain."
 )
 
-app = FastAPI(title="PrivasiGuard", version="2.1.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="PrivasiGuard", version="2.2.0", docs_url=None, redoc_url=None)
 slots = asyncio.Semaphore(1)
 quota_lock = asyncio.Lock()
 recent_requests: deque[float] = deque()
@@ -714,6 +714,13 @@ async def pdf_editor_preview(request: Request):
     _, extension, data, options = await read_tool_upload(request, {".pdf"})
     output = await offline_tool(data, extension, "tool-preview", options)
     return Response(output, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/pdf-merge")
+async def pdf_merge(request: Request):
+    name, extension, data, options = await read_tool_upload(request, {".pdf"}, 20 * 1024 * 1024)
+    output = await offline_tool(data, extension, "tool-merge", options)
+    return tool_download(output, name, "gabungan")
 
 
 @app.post("/api/pdf-sign")

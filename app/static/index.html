@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'">
-  <meta name="description" content="PrivasiGuard: alat gambar, PDF, dan dokumen dengan kontrol privasi. OCR, kompresi, resize piksel, dukungan TIFF, dan tanda tangan PDF.">
+  <meta name="description" content="PrivasiGuard: alat gambar, PDF, dan dokumen dengan kontrol privasi. OCR, kompresi, resize piksel, TIFF, gabungkan PDF, dan tanda tangan PDF.">
   <title>PrivasiGuard · Kendali berkas dan data pribadi</title>
   <link rel="stylesheet" href="/static/style.css">
   <script defer src="/static/zip.js"></script>
@@ -23,7 +23,7 @@
     <div class="privacy-strip"><span>◆ Pemrosesan di server aplikasi</span><span>◇ Hapus metadata saat ekspor</span><span>↗ AI eksternal sesuai pilihan</span></div>
     <nav class="category-tabs" aria-label="Kategori berkas">
       <button type="button" class="active" data-category-select="image" aria-pressed="true"><span class="category-symbol" aria-hidden="true">▧</span><span><strong>Gambar</strong><small>OCR · kompresi · resize · TIFF</small></span></button>
-      <button type="button" data-category-select="pdf" aria-pressed="false"><span class="category-symbol" aria-hidden="true">▤</span><span><strong>PDF</strong><small>OCR halaman · kompresi · tanda tangan</small></span></button>
+      <button type="button" data-category-select="pdf" aria-pressed="false"><span class="category-symbol" aria-hidden="true">▤</span><span><strong>PDF</strong><small>OCR · kompresi · gabungkan · tanda tangan</small></span></button>
       <button type="button" data-category-select="document" aria-pressed="false"><span class="category-symbol" aria-hidden="true">▥</span><span><strong>Dokumen lainnya</strong><small>Word · PowerPoint · Excel · teks</small></span></button>
     </nav>
     <p id="category-description" class="category-description">Alat untuk gambar PNG, JPEG, WebP, dan TIFF satu halaman.</p>
@@ -33,6 +33,7 @@
       <button type="button" data-category="pdf" data-tool="ocr" aria-pressed="false" hidden>01 <span>OCR PDF</span></button>
       <button type="button" data-category="pdf" data-tool="compress" aria-pressed="false" hidden>02 <span>Kompresi PDF</span></button>
       <button type="button" data-category="pdf" data-tool="sign" aria-pressed="false" hidden>03 <span>Tanda tangan PDF</span></button>
+      <button type="button" data-category="pdf" data-tool="merge" aria-pressed="false" hidden>04 <span>Gabungkan PDF</span></button>
       <button type="button" data-category="document" data-tool="ocr" aria-pressed="false" hidden>01 <span>Ekstraksi dokumen</span></button>
     </nav>
     <div id="tool-ocr" class="tool-panel">
@@ -109,6 +110,18 @@
         <label class="check-line"><input id="pdf-metadata" type="checkbox" checked>Hapus metadata dokumen dan XMP</label><p class="hint">Profil seimbang/ukuran kecil dapat mengurangi ketajaman gambar. Ukuran akhir bergantung pada isi PDF dan bisa tidak lebih kecil. PDF dengan field tanda tangan kriptografis tidak diubah.</p>
         <button type="submit" class="primary-button">Kompres PDF</button><p id="compress-status" class="tool-status" role="status" aria-live="polite"></p>
       </form><div id="compress-results" class="tool-results"></div>
+    </section>
+    <section id="tool-merge" class="tool-panel results" hidden aria-labelledby="merge-title">
+      <p class="eyebrow">PDF · TANPA PENGIRIMAN KE AI</p><h2 id="merge-title">Gabungkan PDF</h2><p class="tool-description">Satukan seluruh halaman dari beberapa PDF. Atur urutan berkas dengan tombol naik/turun, lalu unduh satu PDF gabungan.</p>
+      <form id="merge-form" class="tool-form">
+        <label class="upload-field">Tambahkan PDF<input id="merge-files" type="file" accept=".pdf" multiple><small>Pilih 2–20 PDF · maksimal 10 MB per berkas, 20 MB total, dan 100 halaman gabungan</small></label>
+        <p id="merge-summary" class="hint" aria-live="polite">Belum ada PDF dipilih.</p>
+        <ol id="merge-list" class="merge-list" aria-label="Urutan PDF yang akan digabungkan"></ol>
+        <label class="check-line"><input id="merge-metadata" type="checkbox" checked>Hapus metadata dokumen dan XMP</label>
+        <p class="hint">Semua halaman digabungkan sesuai urutan daftar, tanpa merasterisasi teks. Jika penghapusan metadata dinonaktifkan, metadata dokumen pertama digunakan. PDF bersandi atau dengan field tanda tangan kriptografis tidak didukung. Hasil maksimal 15 MB. Fitur OCR, kompresi, dan tanda tangan tetap dibatasi 30 halaman per PDF.</p>
+        <div class="option-row"><button id="merge-submit" type="submit" class="primary-button" disabled>Gabungkan PDF</button><button id="merge-clear" type="button" class="small-button" disabled>Kosongkan daftar</button></div>
+        <p id="merge-status" class="tool-status" role="status" aria-live="polite">Tambahkan sedikitnya dua PDF untuk memulai.</p>
+      </form><div id="merge-results" class="tool-results"></div>
     </section>
     <section id="tool-sign" class="tool-panel results" hidden aria-labelledby="sign-title">
       <p class="eyebrow">EDITOR PDF · TANPA PENGIRIMAN KE AI</p><h2 id="sign-title">Letakkan tanda tangan Anda</h2><p class="tool-description">Gambar atau unggah tanda tangan, pilih halaman, lalu geser dan atur ukurannya pada pratinjau PDF.</p>

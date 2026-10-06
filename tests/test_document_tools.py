@@ -194,6 +194,102 @@ def test_lossy_pdf_smaller_with_text_intact(client):
         assert "PRIVATE DOCUMENT TEXT" in output[0].get_text()
 
 
+def merge_fixture(label, rotation=0, crop=False, pages=2):
+    doc = fitz.open()
+    for number in range(pages):
+        page = doc.new_page(width=600, height=800)
+        page.insert_text((60, 80), f"{label} PAGE {number + 1}")
+    page = doc[0]
+    page.insert_image(fitz.Rect(300, 300, 420, 360), stream=image_bytes((120, 60)))
+    widget = fitz.Widget(); widget.field_name = "Customer"; widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+    widget.rect = fitz.Rect(60, 120, 220, 145); widget.field_value = label
+    page.add_widget(widget)
+    page.add_text_annot((250, 180), f"NOTE {label}")
+    page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(60, 200, 160, 225), "uri": "https://example.com/"})
+    if pages > 1:
+        page.insert_link({"kind": fitz.LINK_GOTO, "from": fitz.Rect(60, 230, 160, 255), "page": 1, "to": fitz.Point(0, 0)})
+    if crop:
+        page.set_cropbox(fitz.Rect(30, 20, 570, 780))
+    page.set_rotation(rotation)
+    doc.set_toc([[1, f"BOOKMARK {label}", 1]])
+    doc.set_metadata({"author": f"AUTHOR {label}"})
+    doc.set_xml_metadata(f"<xmp>{label}</xmp>")
+    return doc.tobytes()
+
+
+def test_merge_order_text_geometry_forms_links_annotations_bookmarks(client):
+    first, second = merge_fixture("SECOND", rotation=90, crop=True), merge_fixture("FIRST")
+    response = upload(client, "/api/pdf-merge", first + second, {"sizes": [len(first), len(second)]})
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    info = json.loads(response.headers["x-document-info"])
+    assert info["files"] == 2 and info["pages"] == 4 and info["source_pages"] == [2, 2]
+    with fitz.open(stream=response.content, filetype="pdf") as result:
+        assert [page.get_text().splitlines()[0] for page in result] == ["SECOND PAGE 1", "SECOND PAGE 2", "FIRST PAGE 1", "FIRST PAGE 2"]
+        source = fitz.open(stream=first, filetype="pdf")
+        assert result[0].rect == source[0].rect and result[0].cropbox == source[0].cropbox
+        assert result[0].rotation == 90
+        assert result[0].get_pixmap().samples == source[0].get_pixmap().samples
+        widgets = [list(result[page].widgets())[0] for page in (0, 2)]
+        assert [widget.field_value for widget in widgets] == ["SECOND", "FIRST"]
+        assert widgets[0].field_name != widgets[1].field_name
+        assert [list(result[page].annots())[0].info["content"] for page in (0, 2)] == ["NOTE SECOND", "NOTE FIRST"]
+        assert any(link.get("uri") == "https://example.com/" for link in result[2].get_links())
+        assert any(link.get("page") == 3 for link in result[2].get_links())
+        assert result.get_toc() == [[1, "BOOKMARK SECOND", 1], [1, "BOOKMARK FIRST", 3]]
+        assert not result.metadata["author"] and not result.get_xml_metadata()
+    kept = upload(client, "/api/pdf-merge", first + second, {"sizes": [len(first), len(second)], "remove_metadata": False})
+    assert kept.status_code == 200, kept.text
+    with fitz.open(stream=kept.content, filetype="pdf") as result:
+        assert result.metadata["author"] == "AUTHOR SECOND" and "SECOND" in result.get_xml_metadata()
+
+
+@pytest.mark.parametrize("sizes", [None, [], [1], [1] * 21, [True, 1], [1.5, 1], [-1, 1], [0, 1], [1, 1]])
+def test_merge_rejects_invalid_framing(client, sizes):
+    original = pdf_bytes()
+    response = upload(client, "/api/pdf-merge", original * 2, {"sizes": sizes})
+    assert response.status_code == 400
+
+
+def test_merge_limits_invalid_encrypted_and_signed_sources(client):
+    original = pdf_bytes()
+    invalid = b"this is not a PDF"
+    assert upload(client, "/api/pdf-merge", original + invalid, {"sizes": [len(original), len(invalid)]}).status_code == 415
+    broken = b"%PDF-broken"
+    assert upload(client, "/api/pdf-merge", original + broken, {"sizes": [len(original), len(broken)]}).status_code == 422
+    assert upload(client, "/api/pdf-merge", original * 2, {"sizes": [11 * 1024 * 1024, len(original)]}).status_code == 413
+    doc = fitz.open(stream=original, filetype="pdf")
+    encrypted = doc.tobytes(encryption=fitz.PDF_ENCRYPT_AES_256, owner_pw="owner", user_pw="secret")
+    response = upload(client, "/api/pdf-merge", original + encrypted, {"sizes": [len(original), len(encrypted)]})
+    assert response.status_code == 422 and "Berkas ke-2" in response.json()["detail"]
+    widget = fitz.Widget(); widget.field_name = "Signature"; widget.field_type = fitz.PDF_WIDGET_TYPE_SIGNATURE
+    widget.rect = fitz.Rect(50, 120, 200, 150); doc[0].add_widget(widget)
+    signed = doc.tobytes()
+    assert upload(client, "/api/pdf-merge", original + signed, {"sizes": [len(original), len(signed)]}).status_code == 409
+    source_a, source_b = merge_fixture("A", pages=70), merge_fixture("B", pages=30)
+    response = upload(client, "/api/pdf-merge", source_a + source_b, {"sizes": [len(source_a), len(source_b)]})
+    assert response.status_code == 200, response.text
+    assert fitz.open(stream=response.content, filetype="pdf").page_count == 100
+    source_c = merge_fixture("C", pages=31)
+    assert upload(client, "/api/pdf-merge", source_a + source_c, {"sizes": [len(source_a), len(source_c)]}).status_code == 413
+
+
+def test_merge_worker_accepts_more_than_ten_mb_combined(client):
+    parts = []
+    for label in ("LARGE FIRST", "LARGE SECOND"):
+        doc = fitz.open(); page = doc.new_page(); page.insert_text((50, 80), label)
+        xref = doc.get_new_xref(); doc.update_object(xref, "<<>>")
+        doc.update_stream(xref, b"x" * (5 * 1024 * 1024 + 1000), compress=False)
+        parts.append(doc.tobytes(garbage=0, deflate=False))
+    assert sum(map(len, parts)) > 10 * 1024 * 1024
+    response = upload(client, "/api/pdf-merge", b"".join(parts), {"sizes": list(map(len, parts))})
+    assert response.status_code == 200, response.text
+    with fitz.open(stream=response.content, filetype="pdf") as result:
+        assert result.page_count == 2 and "LARGE SECOND" in result[1].get_text()
+
+
 @pytest.mark.parametrize("rotation", [0, 90, 180, 270])
 @pytest.mark.parametrize("crop", [False, True])
 def test_signature_matches_preview_geometry(client, rotation, crop):

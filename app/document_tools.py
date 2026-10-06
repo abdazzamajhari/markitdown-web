@@ -129,7 +129,7 @@ def image_preview(data, options):
                                 "pixels": list(image.size), "metadata_removed": True})
 
 
-def open_pdf(data, editing=True):
+def open_pdf(data, editing=True, max_pages=30):
     import pymupdf as fitz
     try:
         doc = fitz.open(stream=data, filetype="pdf")
@@ -138,9 +138,9 @@ def open_pdf(data, editing=True):
     if doc.needs_pass or doc.is_encrypted:
         doc.close()
         raise ToolError(422, "PDF bersandi tidak didukung; gunakan salinan tanpa sandi")
-    if not 1 <= doc.page_count <= 30 or doc.xref_length() > 50000:
+    if not 1 <= doc.page_count <= max_pages or doc.xref_length() > 50000:
         doc.close()
-        raise ToolError(413, "PDF maksimal 30 halaman dan 50000 objek")
+        raise ToolError(413, f"PDF maksimal {max_pages} halaman dan 50000 objek")
     if editing:
         # Inspect signature dictionaries as well as SigFlags, including invisible signatures.
         signed = bool(doc.get_sigflags() > 0)
@@ -160,6 +160,59 @@ def clean_pdf(doc, remove_metadata):
     doc.scrub(attached_files=False, clean_pages=False, embedded_files=False, hidden_text=False,
               javascript=True, metadata=remove_metadata, redactions=False, remove_links=False,
               reset_fields=False, reset_responses=False, thumbnails=False, xml_metadata=remove_metadata)
+
+
+def merge_pdf(data, options):
+    import pymupdf as fitz
+    sizes = options.get("sizes")
+    if not isinstance(sizes, list) or not 2 <= len(sizes) <= 20:
+        raise ToolError(400, "Pilih 2–20 PDF untuk digabungkan")
+    if any(isinstance(size, bool) or not isinstance(size, int) or size <= 0 for size in sizes):
+        raise ToolError(400, "Ukuran berkas PDF tidak valid")
+    if any(size > 10 * 1024 * 1024 for size in sizes) or len(data) > 20 * 1024 * 1024:
+        raise ToolError(413, "PDF maksimal 10 MB per berkas dan 20 MB total")
+    if sum(sizes) != len(data):
+        raise ToolError(400, "Data berkas PDF tidak lengkap atau ukurannya tidak sesuai")
+    remove_metadata = flag(options, "remove_metadata")
+    page_counts, toc = [], []
+    offset = 0
+    with fitz.open() as merged:
+        for index, size in enumerate(sizes):
+            part = data[offset:offset + size]
+            offset += size
+            if not part[:1024].lstrip().startswith(b"%PDF-"):
+                raise ToolError(415, f"Berkas ke-{index + 1} bukan PDF yang valid")
+            try:
+                source = open_pdf(part, max_pages=100)
+            except ToolError as exc:
+                raise ToolError(exc.status, f"Berkas ke-{index + 1}: {exc.message}") from None
+            with source:
+                start = merged.page_count
+                if start + source.page_count > 100:
+                    raise ToolError(413, "PDF gabungan maksimal 100 halaman")
+                if index == 0 and not remove_metadata:
+                    keys = {"title", "author", "subject", "keywords", "creator", "producer", "creationDate", "modDate", "trapped"}
+                    merged.set_metadata({k: v for k, v in source.metadata.items() if k in keys and v})
+                    if source.get_xml_metadata():
+                        merged.set_xml_metadata(source.get_xml_metadata())
+                bookmarks = source.get_toc(simple=False)
+                merged.insert_pdf(source, links=True, annots=True, widgets=True, join_duplicates=False)
+                if merged.xref_length() > 100000:
+                    raise ToolError(413, "PDF gabungan melebihi batas objek")
+                for entry in bookmarks:
+                    if entry[2] > 0:
+                        entry[2] += start
+                    destination = entry[3]
+                    if destination.get("kind") == fitz.LINK_GOTO and destination.get("page", -1) >= 0:
+                        destination["page"] += start
+                    toc.append(entry)
+                page_counts.append(source.page_count)
+        if toc:
+            merged.set_toc(toc)
+        clean_pdf(merged, remove_metadata)
+        result = merged.tobytes(garbage=4, deflate=True, use_objstms=1)
+        return pack(result, {"format": "pdf", "files": len(sizes), "pages": merged.page_count,
+                             "source_pages": page_counts, "metadata_removed": remove_metadata})
 
 
 def compress_pdf(data, options):
@@ -286,4 +339,4 @@ def execute(data, mode):
     if not isinstance(options, dict):
         raise ToolError(400, "Pengaturan tidak valid")
     return {"tool-image": compress_image, "tool-image-preview": image_preview, "tool-compress": compress_pdf,
-            "tool-preview": pdf_preview, "tool-sign": sign_pdf}[operation](data, options)
+            "tool-preview": pdf_preview, "tool-sign": sign_pdf, "tool-merge": merge_pdf}[operation](data, options)

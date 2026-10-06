@@ -271,7 +271,8 @@ def main() -> int:
     extension = sys.argv[1]
     try:
         mode = sys.argv[2] if len(sys.argv) > 2 else ""
-        data = sys.stdin.buffer.read((11 if mode.startswith("tool-sign:") else 10) * 1024 * 1024 + 1)
+        input_limit_mb = 20 if mode.startswith("tool-merge:") else 11 if mode.startswith("tool-sign:") else 10
+        data = sys.stdin.buffer.read(input_limit_mb * 1024 * 1024 + 1)
         if mode.startswith("tool-"):
             from app.document_tools import ToolError, execute
             try:

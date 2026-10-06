@@ -37,7 +37,7 @@
 
   const categoryDescriptions = {
     image: 'Alat untuk gambar PNG, JPEG, WebP, dan TIFF satu halaman.',
-    pdf: 'Alat untuk dokumen PDF: OCR halaman, kompresi, dan tanda tangan visual.',
+    pdf: 'Alat untuk dokumen PDF: OCR halaman, kompresi, gabungkan berkas, dan tanda tangan visual.',
     document: 'Ekstraksi teks dari DOCX, PPTX, XLSX, TXT, CSV, dan JSON.',
   };
   const lastTools = {image: 'ocr', pdf: 'ocr', document: 'ocr'};
@@ -138,6 +138,77 @@
   setupBatch('compress', '/api/pdf-compress', ['pdf'], () => ({profile: $('pdf-profile').value,
     dpi: Number($('pdf-dpi').value), quality: Number($('pdf-quality').value), remove_metadata: $('pdf-metadata').checked,
   }));
+
+
+  let mergeFiles = [], merging = false;
+  function invalidateMerge() { $('merge-results').replaceChildren(); $('merge-status').textContent = 'Atur urutan berkas, lalu klik “Gabungkan PDF”.'; }
+  function renderMergeList(focusIndex = null, focusAction = null) {
+    const total = mergeFiles.reduce((sum, file) => sum + file.size, 0);
+    $('merge-summary').textContent = mergeFiles.length ? `${mergeFiles.length} PDF · ${bytesLabel(total)} total · urutan halaman mengikuti daftar di bawah.` : 'Belum ada PDF dipilih.';
+    $('merge-submit').disabled = merging || mergeFiles.length < 2;
+    $('merge-clear').disabled = merging || !mergeFiles.length;
+    $('merge-files').disabled = $('merge-metadata').disabled = merging;
+    $('merge-list').replaceChildren();
+    mergeFiles.forEach((file, index) => {
+      const row = document.createElement('li'); row.className = 'merge-file';
+      const position = document.createElement('span'); position.className = 'merge-position'; position.textContent = String(index + 1);
+      const meta = document.createElement('div'); meta.className = 'merge-file-meta';
+      const name = document.createElement('strong'); name.textContent = file.name;
+      const size = document.createElement('small'); size.textContent = bytesLabel(file.size); meta.append(name, size);
+      const actions = document.createElement('div'); actions.className = 'merge-file-actions';
+      [['up', '↑', 'Naikkan', index === 0], ['down', '↓', 'Turunkan', index === mergeFiles.length - 1], ['remove', 'Hapus', 'Hapus', false]].forEach(([action, label, description, boundary]) => {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'small-button'; button.textContent = label;
+        button.dataset.action = action; button.dataset.index = String(index); button.setAttribute('aria-label', `${description} berkas ${index + 1}: ${file.name}`); button.disabled = merging || boundary;
+        button.addEventListener('click', () => {
+          if (merging) return;
+          let target = index;
+          if (action === 'remove') { mergeFiles.splice(index, 1); target = Math.min(index, mergeFiles.length - 1); }
+          else { target += action === 'up' ? -1 : 1; [mergeFiles[index], mergeFiles[target]] = [mergeFiles[target], mergeFiles[index]]; }
+          invalidateMerge(); renderMergeList(target, action);
+        }); actions.append(button);
+      });
+      row.append(position, meta, actions); $('merge-list').append(row);
+    });
+    if (focusIndex !== null && focusIndex >= 0) {
+      const button = $('merge-list').querySelector(`[data-index="${focusIndex}"][data-action="${focusAction}"]:not(:disabled)`)
+        || $('merge-list').querySelector(`[data-index="${focusIndex}"][data-action="remove"]`);
+      button?.focus();
+    } else if (focusIndex !== null) $('merge-files').focus();
+  }
+  $('merge-files').addEventListener('change', (event) => {
+    if (merging) return;
+    const chosen = [...event.target.files]; event.target.value = '';
+    try {
+      chosen.forEach((file) => checkFile(file, ['pdf']));
+      const next = [...mergeFiles, ...chosen];
+      if (next.length > 20) throw new Error('Pilih maksimal 20 PDF.');
+      if (next.reduce((sum, file) => sum + file.size, 0) > 20 * 1024 * 1024) throw new Error('Ukuran total PDF maksimal 20 MB.');
+      mergeFiles = next; invalidateMerge(); renderMergeList();
+    } catch (error) { $('merge-status').textContent = error.message; }
+  });
+  $('merge-clear').addEventListener('click', () => {
+    if (merging) return;
+    mergeFiles = []; invalidateMerge(); renderMergeList(); $('merge-status').textContent = 'Tambahkan sedikitnya dua PDF untuk memulai.'; $('merge-files').focus();
+  });
+  $('merge-metadata').addEventListener('change', invalidateMerge);
+  $('merge-form').addEventListener('submit', async (event) => {
+    event.preventDefault(); if (merging || mergeFiles.length < 2) return;
+    const files = [...mergeFiles], options = {sizes: files.map((file) => file.size), remove_metadata: $('merge-metadata').checked};
+    merging = true; $('merge-results').replaceChildren(); renderMergeList(); $('merge-status').textContent = `Menggabungkan ${files.length} PDF…`;
+    try {
+      const response = await request('/api/pdf-merge', {name: 'privasiguard.pdf'}, options, new Blob(files, {type: 'application/octet-stream'}));
+      const blob = await response.blob(), info = JSON.parse(response.headers.get('X-Document-Info') || '{}');
+      const card = document.createElement('article'); card.className = 'output-card';
+      const title = document.createElement('h3'); title.textContent = 'PDF gabungan siap';
+      const stats = document.createElement('p'); stats.className = 'size-comparison'; stats.textContent = `${info.files} PDF → ${info.pages} halaman · ${bytesLabel(blob.size)}`;
+      const order = document.createElement('ol'); order.className = 'merge-result-order';
+      files.forEach((file, index) => { const item = document.createElement('li'); item.textContent = `${file.name} · ${info.source_pages[index]} halaman`; order.append(item); });
+      const name = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'privasiguard-gabungan.pdf';
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'primary-button'; button.textContent = '↓ Unduh PDF gabungan'; button.addEventListener('click', () => download(blob, name));
+      card.append(title, stats, order, button); $('merge-results').append(card); $('merge-status').textContent = 'Penggabungan selesai. Urutan berkas ditampilkan pada hasil.';
+    } catch (error) { $('merge-status').textContent = error.message; }
+    finally { merging = false; renderMergeList(); }
+  });
 
   // The signature remains in browser memory until PDF export.
   const canvas = $('signature-canvas'), ctx = canvas.getContext('2d');
