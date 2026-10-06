@@ -56,12 +56,16 @@
   document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => selectTool(button)));
   document.querySelectorAll('[data-category-select]').forEach((button) => button.addEventListener('click', () => selectCategory(button.dataset.categorySelect)));
   selectCategory('image');
-  $('clear-session').addEventListener('click', () => {
+  let clearingSession = false;
+  function clearSession() {
+    if (clearingSession) return;
+    clearingSession = true;
     for (const url of urls) revoke(url);
     document.querySelectorAll('input[type=file]').forEach((input) => { input.value = ''; });
     $('external-ai').checked = false;
     window.location.reload();
-  });
+  }
+  $('clear-session').addEventListener('click', clearSession);
   window.addEventListener('pagehide', () => { for (const url of urls) URL.revokeObjectURL(url); });
   [['image-quality', 'image-quality-value'], ['pdf-quality', 'pdf-quality-value']].forEach(([input, output]) => {
     $(input).addEventListener('input', () => { $(output).value = $(input).value; });
@@ -361,4 +365,9 @@
     } catch (error) { $('sign-status').textContent = error.message; }
     finally { loading = false; updateEditor(); }
   });
+  window.PrivasiGuardSession.watch({window, document, clear: clearSession, hasData: () => Boolean(
+    mergeFiles.length || pdfFile || signature || ink || urls.size || $('external-ai').checked
+    || document.querySelector('#files .file-row, .output-card')
+    || [...document.querySelectorAll('input[type=file]')].some((input) => input.files.length)
+  )});
 })();

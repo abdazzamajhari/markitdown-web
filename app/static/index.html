@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/static/style.css">
   <script defer src="/static/zip.js"></script>
   <script defer src="/static/app.js"></script>
+  <script defer src="/static/session.js"></script>
   <script defer src="/static/tools.js"></script>
 </head>
 <body>
@@ -18,6 +19,7 @@
       <div class="brand"><span class="mark" aria-hidden="true">P<span>◆</span></span><span>Privasi<strong>Guard</strong></span></div>
       <div class="header-actions"><span class="header-badge"><span class="status-dot" aria-hidden="true"></span> Dokumen dalam kendali Anda</span><button class="small-button" id="clear-session" type="button">Bersihkan sesi</button></div>
     </header>
+    <p class="hint" id="session-policy">Sesi otomatis dibersihkan jika tab ditinggalkan atau browser diminimalkan selama 1 menit. Berkas dan hasil yang belum diunduh akan dilepas.</p>
 
     <section class="suite-intro"><p class="eyebrow">PENGELOLAAN DOKUMEN & PELINDUNGAN DATA PRIBADI</p><h1>Lebih ringkas.<br><em>Lebih terkendali.</em></h1><p class="lead">Ekstrak teks, perkecil berkas, atur ukuran gambar, dan letakkan tanda tangan pada PDF dalam satu ruang kerja.</p></section>
     <div class="privacy-strip"><span>◆ Pemrosesan di server aplikasi</span><span>◇ Hapus metadata saat ekspor</span><span>↗ AI eksternal sesuai pilihan</span></div>
@@ -144,7 +146,7 @@
         <div class="editor-preview"><div class="page-controls"><button id="sign-prev" type="button" disabled>← Sebelumnya</button><span id="sign-page-label">Halaman —</span><button id="sign-next" type="button" disabled>Berikutnya →</button></div><p class="hint editor-help">Klik tanda tangan untuk memilih. Geser kotaknya atau gunakan X/Y untuk mengatur posisi. Ukuran mengikuti rasio gambar.</p><div class="editor-scroll"><div id="sign-stage" class="sign-stage"><img id="sign-page" alt="Pratinjau halaman PDF" hidden><div id="signature-layer"></div></div><p id="sign-empty" class="editor-empty">Pratinjau dokumen akan muncul di sini.</p></div></div>
       </div>
     </section>
-    <footer><strong>PrivasiGuard.</strong> Unggahan diproses di memori server dan tidak disimpan sebagai arsip permanen oleh aplikasi. Kompresi/resize dan tanda tangan tidak memakai AI eksternal. Metadata yang dihapus tidak mencakup data pribadi yang terlihat di isi dokumen. Gunakan “Bersihkan sesi” untuk melepas berkas dan hasil dari halaman ini. <a href="https://github.com/abdazzamajhari/markitdown-web" target="_blank" rel="noopener noreferrer">Kode sumber</a></footer>
+    <footer><strong>PrivasiGuard.</strong> Unggahan diproses di memori server dan tidak disimpan sebagai arsip permanen oleh aplikasi. Kompresi/resize, penggabungan PDF, dan tanda tangan tidak memakai AI eksternal. Metadata yang dihapus tidak mencakup data pribadi yang terlihat di isi dokumen. Sesi dibersihkan otomatis setelah tab ditinggalkan selama 1 menit; tombol “Bersihkan sesi” juga tersedia. <a href="https://github.com/abdazzamajhari/markitdown-web" target="_blank" rel="noopener noreferrer">Kode sumber</a></footer>
   </main>
 </body>
 </html>
