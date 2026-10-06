@@ -17,5 +17,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test tests/test_session.cjs
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
       - run: docker build -t markitdown-web:test .

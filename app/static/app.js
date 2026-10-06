@@ -740,6 +740,7 @@ document.addEventListener('drop', (event) => {
   if (event.dataTransfer?.files?.length) {
     event.preventDefault();
     if (!document.querySelector('#tool-ocr').hidden) addFiles(event.dataTransfer.files);
+    else window.handleToolDrop?.([...event.dataTransfer.files]);
   }
   document.body.classList.remove('page-dragging');
 });

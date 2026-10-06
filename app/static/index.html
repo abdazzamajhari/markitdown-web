@@ -88,7 +88,7 @@
     <section id="tool-image" class="tool-panel results" hidden aria-labelledby="image-title">
       <p class="eyebrow">GAMBAR · TANPA PENGIRIMAN KE AI</p><h2 id="image-title">Kompresi & resize gambar</h2><p class="tool-description">Atur lebar dan tinggi dalam piksel, kualitas, dan format keluaran. Bandingkan ukuran hasil sebelum mengunduh.</p>
       <form id="image-form" class="tool-form">
-        <label class="upload-field">Pilih gambar<input id="image-files" type="file" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff" multiple required><small>PNG, JPEG, WebP, TIFF satu halaman · maksimal 10 MB dan 24 megapiksel per gambar</small></label>
+        <label class="upload-field"><strong>Seret gambar ke sini</strong><span class="upload-instruction">atau klik untuk memilih satu atau beberapa gambar</span><input id="image-files" type="file" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff" multiple><small>PNG, JPEG, WebP, TIFF satu halaman · maksimal 10 MB dan 24 megapiksel per gambar</small><small id="image-selected" class="upload-selection" aria-live="polite">Belum ada gambar dipilih.</small></label>
         <div class="settings-grid">
           <label>Lebar (px)<input id="image-width" type="number" min="1" max="12000" placeholder="Ukuran asli"></label>
           <label>Tinggi (px)<input id="image-height" type="number" min="1" max="12000" placeholder="Otomatis"></label>
@@ -103,7 +103,7 @@
     <section id="tool-compress" class="tool-panel results" hidden aria-labelledby="compress-title">
       <p class="eyebrow">PDF · TANPA PENGIRIMAN KE AI</p><h2 id="compress-title">Kompresi PDF</h2><p class="tool-description">Optimalkan struktur PDF atau perkecil gambar di dalamnya. Teks tetap dapat dipilih jika tersedia pada PDF sumber.</p>
       <form id="compress-form" class="tool-form">
-        <label class="upload-field">Pilih PDF<input id="compress-files" type="file" accept=".pdf" multiple required><small>Maksimal 10 MB dan 30 halaman per PDF</small></label>
+        <label class="upload-field"><strong>Seret PDF ke sini</strong><span class="upload-instruction">atau klik untuk memilih satu atau beberapa PDF</span><input id="compress-files" type="file" accept=".pdf" multiple><small>Maksimal 10 MB dan 30 halaman per PDF</small><small id="compress-selected" class="upload-selection" aria-live="polite">Belum ada PDF dipilih.</small></label>
         <div class="settings-grid">
           <label>Profil<select id="pdf-profile"><option value="lossless">Tanpa penurunan kualitas</option><option value="balanced">Seimbang</option><option value="small">Ukuran kecil</option></select></label>
           <label>Resolusi gambar (DPI)<input id="pdf-dpi" type="number" min="72" max="300" value="150" disabled></label>
@@ -116,7 +116,7 @@
     <section id="tool-merge" class="tool-panel results" hidden aria-labelledby="merge-title">
       <p class="eyebrow">PDF · TANPA PENGIRIMAN KE AI</p><h2 id="merge-title">Gabungkan PDF</h2><p class="tool-description">Satukan seluruh halaman dari beberapa PDF. Atur urutan berkas dengan tombol naik/turun, lalu unduh satu PDF gabungan.</p>
       <form id="merge-form" class="tool-form">
-        <label class="upload-field">Tambahkan PDF<input id="merge-files" type="file" accept=".pdf" multiple><small>Pilih 2–20 PDF · maksimal 10 MB per berkas, 20 MB total, dan 100 halaman gabungan</small></label>
+        <label class="upload-field"><strong>Seret beberapa PDF ke sini</strong><span class="upload-instruction">atau klik untuk menambahkan PDF ke daftar</span><input id="merge-files" type="file" accept=".pdf" multiple><small>Pilih 2–20 PDF · maksimal 10 MB per berkas, 20 MB total, dan 100 halaman gabungan</small></label>
         <p id="merge-summary" class="hint" aria-live="polite">Belum ada PDF dipilih.</p>
         <ol id="merge-list" class="merge-list" aria-label="Urutan PDF yang akan digabungkan"></ol>
         <label class="check-line"><input id="merge-metadata" type="checkbox" checked>Hapus metadata dokumen dan XMP</label>
@@ -130,8 +130,8 @@
       <p class="signature-note">Fitur ini menempatkan tanda tangan visual pada PDF. Sertifikat digital dan verifikasi identitas penanda tangan belum tersedia.</p>
       <div class="editor-layout">
         <div class="editor-settings">
-          <label class="upload-field">Dokumen PDF<input id="sign-file" type="file" accept=".pdf"><small>Maksimal 10 MB · 30 halaman</small></label>
-          <label class="upload-field">Unggah gambar tanda tangan<input id="signature-file" type="file" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff"><small>PNG, JPEG, WebP, TIFF satu halaman · maksimal 1 MB · 2 megapiksel</small></label>
+          <label class="upload-field"><strong>Seret dokumen PDF ke sini</strong><span class="upload-instruction">atau klik untuk memilih satu PDF</span><input id="sign-file" type="file" accept=".pdf"><small>Maksimal 10 MB · 30 halaman</small><small id="sign-selected" class="upload-selection" aria-live="polite">Belum ada PDF dipilih.</small></label>
+          <label class="upload-field"><strong>Seret gambar tanda tangan ke sini</strong><span class="upload-instruction">atau klik untuk memilih satu gambar</span><input id="signature-file" type="file" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff"><small>PNG, JPEG, WebP, TIFF satu halaman · maksimal 1 MB · 2 megapiksel</small><small id="signature-selected" class="upload-selection" aria-live="polite">Belum ada gambar dipilih.</small></label>
           <p class="field-caption">Atau gambar tanda tangan di bawah</p><canvas id="signature-canvas" width="800" height="280" aria-label="Area menggambar tanda tangan"></canvas>
           <div class="option-row"><button id="signature-clear" type="button" class="small-button">Hapus goresan</button><button id="signature-use" type="button" class="small-button">Gunakan goresan</button></div>
           <label class="check-line"><input id="signature-white" type="checkbox">Hilangkan latar hampir putih</label>

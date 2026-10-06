@@ -16,6 +16,36 @@
     setTimeout(() => revoke(url), 60000);
   };
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+  const uploadReceivers = {}, batchFiles = {image: [], compress: []};
+  function setupUpload(inputId, statusId, receive) {
+    const input = $(inputId), area = input.closest('.upload-field');
+    const hasFiles = (event) => Array.from(event.dataTransfer?.types || []).includes('Files')
+      || Array.from(event.dataTransfer?.items || []).some((item) => item.kind === 'file');
+    const give = (files) => {
+      if (input.disabled) { $(statusId).textContent = 'Tunggu proses selesai sebelum mengganti atau menambah berkas.'; return; }
+      const chosen = Array.from(files || []);
+      if (!chosen.length) return;
+      if (!input.multiple && chosen.length !== 1) { $(statusId).textContent = 'Pilih atau seret satu berkas saja ke area ini.'; return; }
+      try { Promise.resolve(receive(chosen)).catch((error) => { $(statusId).textContent = error.message; }); }
+      catch (error) { $(statusId).textContent = error.message; }
+    };
+    input.addEventListener('change', () => { const files = [...input.files]; input.value = ''; give(files); });
+    for (const type of ['dragenter', 'dragover']) area.addEventListener(type, (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault(); event.stopPropagation();
+      event.dataTransfer.dropEffect = input.disabled ? 'none' : 'copy';
+      area.classList.toggle('dragging', !input.disabled);
+    });
+    area.addEventListener('dragleave', (event) => { if (!area.contains(event.relatedTarget)) area.classList.remove('dragging'); });
+    area.addEventListener('drop', (event) => {
+      const files = Array.from(event.dataTransfer?.files || []);
+      if (!files.length && !hasFiles(event)) return;
+      event.preventDefault(); event.stopPropagation(); area.classList.remove('dragging'); document.body.classList.remove('page-dragging');
+      if (!files.length) { $(statusId).textContent = 'Seret berkas, bukan folder atau tautan.'; return; }
+      give(files);
+    });
+    uploadReceivers[inputId] = give;
+  }
 
   async function request(path, file, options = {}, body = file) {
     const controller = new AbortController();
@@ -114,14 +144,22 @@
   }
 
   function setupBatch(kind, path, extensions, options) {
+    setupUpload(kind + '-files', kind + '-status', (files) => {
+      files.forEach((file) => checkFile(file, extensions));
+      batchFiles[kind] = files;
+      $(kind + '-selected').textContent = `${files.length} berkas dipilih: ${files.map((file) => file.name).join(' · ')}`;
+      $(kind + '-results').replaceChildren();
+      $(kind + '-status').textContent = 'Berkas siap. Periksa pengaturan, lalu mulai proses.';
+    });
     $(kind + '-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = event.currentTarget, submit = form.querySelector('[type=submit]');
-      const files = [...$(kind + '-files').files], status = $(kind + '-status'), result = $(kind + '-results');
-      if (!files.length) return;
+      if (submit.disabled) return;
+      const files = [...batchFiles[kind]], status = $(kind + '-status'), result = $(kind + '-results');
+      if (!files.length) { status.textContent = 'Pilih atau seret berkas terlebih dahulu.'; return; }
       // Freeze the selected settings for the complete batch.
       const settings = options();
-      submit.disabled = true; result.replaceChildren();
+      submit.disabled = $(kind + '-files').disabled = true; result.replaceChildren();
       for (const [i, file] of files.entries()) {
         status.textContent = `Memproses ${i + 1}/${files.length}: ${file.name}…`;
         try {
@@ -132,7 +170,7 @@
           const message = document.createElement('p'); message.className = 'notice'; message.textContent = `${file.name}: ${error.message}`; result.append(message);
         }
       }
-      status.textContent = 'Pemrosesan selesai. Periksa hasil sebelum mengunduh.'; submit.disabled = false;
+      status.textContent = 'Pemrosesan selesai. Periksa hasil sebelum mengunduh.'; submit.disabled = $(kind + '-files').disabled = false;
     });
   }
   setupBatch('image', '/api/image-compress', ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'], () => ({
@@ -179,9 +217,8 @@
       button?.focus();
     } else if (focusIndex !== null) $('merge-files').focus();
   }
-  $('merge-files').addEventListener('change', (event) => {
+  setupUpload('merge-files', 'merge-status', (chosen) => {
     if (merging) return;
-    const chosen = [...event.target.files]; event.target.value = '';
     try {
       chosen.forEach((file) => checkFile(file, ['pdf']));
       const next = [...mergeFiles, ...chosen];
@@ -257,9 +294,13 @@
     if (!ink) { $('sign-status').textContent = 'Gambar tanda tangan terlebih dahulu.'; return; }
     cropCanvas().toBlob((blob) => { if (blob) void setSignature(blob).catch((e) => { $('sign-status').textContent = e.message; }); }, 'image/png');
   });
-  $('signature-file').addEventListener('change', async (event) => {
-    try { const file = event.target.files[0]; checkFile(file, ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'], 1024 * 1024); await setSignature(await browserPreview(file, file.name, 2000000), file); }
-    catch (error) { $('sign-status').textContent = error.message; }
+  setupUpload('signature-file', 'sign-status', async ([file]) => {
+    checkFile(file, ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'], 1024 * 1024);
+    loading = true; updateEditor();
+    try {
+      await setSignature(await browserPreview(file, file.name, 2000000), file);
+      $('signature-selected').textContent = file.name;
+    } finally { loading = false; updateEditor(); }
   });
 
   function updateEditor() {
@@ -313,11 +354,12 @@
     } catch (error) { $('sign-status').textContent = error.message; }
     finally { loading = false; updateEditor(); }
   }
-  $('sign-file').addEventListener('change', async (event) => {
+  setupUpload('sign-file', 'sign-status', async ([file]) => {
     // Prevent changing the source while a request is running.
     if (loading) { $('sign-status').textContent = 'Tunggu proses halaman selesai sebelum mengganti PDF.'; return; }
     try {
-      const file = event.target.files[0]; checkFile(file, ['pdf']); pdfFile = file; page = 1; pages = 0;
+      checkFile(file, ['pdf']); pdfFile = file; page = 1; pages = 0;
+      $('sign-selected').textContent = file.name;
       placements = []; selected = null; revoke(pageUrl); pageUrl = null;
       $('sign-page').hidden = true; $('sign-empty').hidden = false; $('sign-result').replaceChildren(); renderPlacements(); await showPage(1);
     } catch (error) { $('sign-status').textContent = error.message; }
@@ -365,8 +407,17 @@
     } catch (error) { $('sign-status').textContent = error.message; }
     finally { loading = false; updateEditor(); }
   });
+  window.handleToolDrop = (files) => {
+    const panel = document.querySelector('.tool-panel:not([hidden])')?.id;
+    const target = {'tool-image': 'image-files', 'tool-compress': 'compress-files', 'tool-merge': 'merge-files'}[panel];
+    if (target) uploadReceivers[target](files);
+    else if (panel === 'tool-sign') {
+      if (files.length !== 1) { $('sign-status').textContent = 'Seret satu PDF atau satu gambar tanda tangan ke area yang sesuai.'; return; }
+      uploadReceivers[/\.pdf$/i.test(files[0].name) ? 'sign-file' : 'signature-file'](files);
+    }
+  };
   window.PrivasiGuardSession.watch({window, document, clear: clearSession, hasData: () => Boolean(
-    mergeFiles.length || pdfFile || signature || ink || urls.size || $('external-ai').checked
+    batchFiles.image.length || batchFiles.compress.length || mergeFiles.length || pdfFile || signature || ink || urls.size || $('external-ai').checked
     || document.querySelector('#files .file-row, .output-card')
     || [...document.querySelectorAll('input[type=file]')].some((input) => input.files.length)
   )});
