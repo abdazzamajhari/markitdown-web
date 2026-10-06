@@ -459,7 +459,7 @@ async def index():
 
 @app.get("/static/{filename}", include_in_schema=False)
 async def static(filename: str):
-    if filename not in {"app.js", "style.css", "zip.js", "tools.js"}:
+    if filename not in {"app.js", "style.css", "zip.js", "tools.js", "session.js"}:
         raise HTTPException(404)
     return FileResponse(ROOT / "static" / filename, headers={"Cache-Control": "no-cache"})
 

@@ -1,6 +1,7 @@
 """Behavioral checks for the single DeepSeek OCR path and PDF limit."""
 import io
 import json
+import re
 import zipfile
 
 import httpx
@@ -108,6 +109,18 @@ def test_home_and_configuration(client, monkeypatch):
     assert client.get("/api/capabilities").json() == {"image_ocr": "sumopod", "image_ocr_model": "deepseek-v4.1-flash:netra"}
     assert "PrivasiGuard" in client.get("/").text
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+
+
+def test_all_page_assets_are_available(client):
+    assets = re.findall(r'(?:src|href)="(/static/[^\"]+)"', client.get("/").text)
+    assert "/static/session.js" in assets
+    for path in assets:
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.content, path
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.headers["x-content-type-options"] == "nosniff"
+    assert client.get("/static/private.txt").status_code == 404
 
 
 def test_text_and_office_conversion(client):
