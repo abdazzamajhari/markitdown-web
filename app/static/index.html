@@ -56,7 +56,8 @@
         <input id="picker" type="file" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff" multiple hidden>
         <p id="upload-hint" class="hint">PNG, JPEG, WebP, TIFF satu halaman · hingga 10 MB dan 8 megapiksel per gambar.</p>
         <p id="ocr-mode" class="ocr-mode" role="status">Memeriksa layanan OCR…</p>
-        <div id="ocr-ai-options"><label class="check-line consent"><input type="checkbox" id="external-ai"> <span id="ocr-ai-label">Gunakan SumoPod AI untuk OCR gambar</span></label><p id="ocr-ai-hint" class="hint">Saat aktif, gambar dikirim ke SumoPod. Saat nonaktif, OCR menggunakan Tesseract di server aplikasi.</p></div>
+        <div id="ocr-ai-options"><label class="check-line consent"><input type="checkbox" id="external-ai"> <span id="ocr-ai-label">Izinkan pengiriman gambar ke server Unlimited-OCR</span></label><p id="ocr-ai-hint" class="hint">OCR memakai Unlimited-OCR. Gambar dinormalisasi dan metadata dihapus sebelum dikirim ke server GPU. Persetujuan diperlukan untuk memulai.</p></div>
+        <div id="language-review-options" hidden><label class="check-line consent"><input type="checkbox" id="language-review-ai"> <span>Pemeriksaan bahasa tambahan melalui SumoPod Netra (opsional)</span></label><p class="hint">Hanya teks OCR dikirim ke SumoPod. Pemeriksaan ini tidak mengubah transkripsi Unlimited-OCR.</p></div>
       </div>
     </section>
 

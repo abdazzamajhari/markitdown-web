@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
-from app import main
+from app import main, unlimited_ocr
 
 
 @pytest.fixture
@@ -17,6 +17,8 @@ def client(monkeypatch):
     main.recent_requests.clear()
     main.region_requests.clear()
     monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
+    monkeypatch.setenv("UNLIMITED_OCR_BASE_URL", "https://gpu.example.test/v1")
+    monkeypatch.setattr(unlimited_ocr.httpx, "stream", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("external provider called")))
     monkeypatch.setattr(main.httpx, "post", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("external provider called")))
     return TestClient(main.app)
 
@@ -108,7 +110,14 @@ def test_tiff_input_resize_lossless_preview_and_metadata(client, extension, byte
     assert Image.open(io.BytesIO(converted.content)).size == (200, 100)
 
 
-def test_tiff_orientation_alpha_ocr_and_signature(client):
+def test_tiff_orientation_alpha_ocr_and_signature(client, monkeypatch):
+    def analyze(data, mime):
+        assert mime == "image/png"
+        with Image.open(io.BytesIO(data)) as prepared:
+            assert prepared.format == "PNG" and prepared.mode == "RGB"
+            assert prepared.getpixel((0, 0)) == (255, 255, 255)
+        return {"markdown": "PRIVATE TIFF TEXT", "regions": [{"x": 0, "y": 0, "w": 1, "h": .5, "text": "PRIVATE TIFF TEXT", "source": "unlimited-ocr"}]}
+    monkeypatch.setattr(unlimited_ocr, "analyze", analyze)
     image = Image.new("RGBA", (700, 200), (255, 255, 255, 0))
     ImageDraw.Draw(image).text((30, 30), "PRIVATE TIFF TEXT", fill=(0, 0, 0, 255), font_size=32)
     buf = io.BytesIO(); image.save(buf, "TIFF", compression="tiff_lzw")
@@ -116,10 +125,10 @@ def test_tiff_orientation_alpha_ocr_and_signature(client):
     preview = upload(client, "/api/image-preview", original, {}, "signature.tiff")
     assert preview.status_code == 200, preview.text
     assert Image.open(io.BytesIO(preview.content)).getpixel((0, 0))[3] == 0
-    ocr = client.post("/api/convert", content=original, headers={"X-Filename": "scan.tiff"})
+    ocr = client.post("/api/convert", content=original, headers={"X-Filename": "scan.tiff", "X-External-AI": "true"})
     assert ocr.status_code == 200 and "PRIVATE" in ocr.text
-    assert ocr.headers["x-ocr-engine"] == "tesseract"
-    regions = client.post("/api/regions", content=original, headers={"X-Filename": "scan.tif"})
+    assert ocr.headers["x-ocr-engine"] == unlimited_ocr.MODEL
+    regions = client.post("/api/regions", content=original, headers={"X-Filename": "scan.tif", "X-External-AI": "true"})
     assert regions.status_code == 200 and regions.json()["regions"]
     pdf = pdf_bytes()
     signed = upload(client, "/api/pdf-sign", pdf + original, {"pdf_size": len(pdf), "placements": [{"page": 1, "x": .1, "y": .5, "w": .4, "h": .1}]})
@@ -141,7 +150,7 @@ def test_tiff_multipage_and_invalid_content_are_refused(client):
     for path in ("/api/image-compress", "/api/image-preview"):
         response = upload(client, path, original, {}, "multipage.tiff")
         assert response.status_code == 415 and "multipage" in response.json()["detail"]
-    ocr = client.post("/api/convert", content=original, headers={"X-Filename": "multipage.tiff"})
+    ocr = client.post("/api/convert", content=original, headers={"X-Filename": "multipage.tiff", "X-External-AI": "true"})
     assert ocr.status_code == 415 and "multipage" in ocr.json()["detail"]
     assert upload(client, "/api/image-compress", image_bytes(), {}, "fake.tiff").status_code == 415
     assert upload(client, "/api/image-preview", image_bytes((100, 50)), {"max_pixels": 1000}, "a.png").status_code == 413
@@ -348,12 +357,12 @@ def test_invalid_settings_encrypted_signed_and_limits(client):
     assert invalid.status_code == 400
 
 
-def test_private_ocr_and_explicit_external_consent(client, monkeypatch):
+def test_ocr_and_language_review_require_explicit_consent(client, monkeypatch):
     monkeypatch.setenv("SUMOPOD_API_KEY", "configured-but-not-used")
     original = Image.new("RGB", (700, 200), "white")
     ImageDraw.Draw(original).text((30, 30), "PRIVATE LOCAL OCR TEXT", fill="black", font_size=32)
     buffer = io.BytesIO(); original.save(buffer, "PNG")
     response = client.post("/api/convert", content=buffer.getvalue(), headers={"X-Filename": "a.png"})
-    assert response.status_code == 200, response.text
-    assert response.headers["x-ocr-engine"] == "tesseract" and "PRIVATE" in response.text
+    assert response.status_code == 400, response.text
+    assert "Unlimited-OCR" in response.json()["detail"]
     assert client.post("/api/pdf-language-check", json={"text": "Private local OCR"}).status_code == 400
