@@ -127,12 +127,15 @@ def analyze(image: bytes, mime_type: str) -> dict:
     try:
         reply = json.loads(body)
         choice = reply["choices"][0]
+        if not isinstance(choice, dict):
+            raise ValueError
         if choice.get("finish_reason") == "length":
             raise HTTPException(502, "Hasil Unlimited-OCR terpotong; keluaran parsial tidak digunakan")
         content = choice["message"]["content"]
         if choice.get("finish_reason") != "stop" or not isinstance(content, str) or reply.get("model") != model:
             raise ValueError
-    except (KeyError, IndexError, TypeError, ValueError):
+        content.encode("utf-8")  # Reject malformed Unicode before constructing API output.
+    except (KeyError, IndexError, TypeError, ValueError, UnicodeError):
         raise HTTPException(502, "Respons atau nama model Unlimited-OCR tidak sesuai") from None
     result = parse_output(content)
     if len(result["markdown"].encode("utf-8")) > MAX_OUTPUT_BYTES:

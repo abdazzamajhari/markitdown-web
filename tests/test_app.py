@@ -296,3 +296,23 @@ def test_optional_language_review_is_text_only_and_independent(client, monkeypat
     assert client.post("/api/pdf-language-check", json={"text": text}, headers={"X-External-AI": "true"}).status_code == 502
     fake_provider(monkeypatch, text="TEKS TETAP TERSEDIA")
     assert upload(client, "a.pdf", pdf_bytes(), "/api/pdf-preview?page=1").json()["page_text"] == "TEKS TETAP TERSEDIA"
+
+
+@pytest.mark.parametrize("reply", [{"choices": [None]}, {"choices": [[]]}, {"choices": "bad"},
+                                    {"choices": []}, {"model": unlimited_ocr.MODEL, "choices": [
+                                        {"message": {"content": chr(0xd800)}, "finish_reason": "stop"}]}])
+def test_malformed_choice_or_unicode_is_a_provider_error(client, monkeypatch, reply):
+    @contextmanager
+    def stream(*args, **kwargs):
+        yield httpx.Response(200, content=json.dumps(reply).encode())
+    monkeypatch.setattr(unlimited_ocr.httpx, "stream", stream)
+    assert upload(client, "a.png", image_bytes()).status_code == 502
+
+
+def test_oversized_provider_body_is_bounded(client, monkeypatch):
+    @contextmanager
+    def stream(*args, **kwargs):
+        yield httpx.Response(200, content=b"x" * (unlimited_ocr.MAX_OUTPUT_BYTES + 65537))
+    monkeypatch.setattr(unlimited_ocr.httpx, "stream", stream)
+    response = upload(client, "a.png", image_bytes())
+    assert response.status_code == 502 and "terlalu besar" in response.json()["detail"]
