@@ -22,6 +22,7 @@ def client(monkeypatch):
     monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
     monkeypatch.delenv("UNLIMITED_OCR_API_KEY", raising=False)
     monkeypatch.setenv("UNLIMITED_OCR_BASE_URL", "https://gpu.example.test/v1")
+    monkeypatch.setenv("UNLIMITED_OCR_BACKEND", "vllm")
     monkeypatch.delenv("UNLIMITED_OCR_MODEL", raising=False)
     return TestClient(app)
 
@@ -102,7 +103,7 @@ def test_configuration_is_explicit_and_never_reuses_sumopod(client, monkeypatch)
     monkeypatch.setenv("SUMOPOD_API_KEY", "not-an-ocr-key")
     capabilities = client.get("/api/capabilities").json()
     assert capabilities == {"image_ocr": "unavailable", "pdf_ocr": "unavailable",
-                            "image_ocr_model": unlimited_ocr.MODEL, "requires_external_consent": True}
+                            "image_ocr_model": unlimited_ocr.MODEL, "requires_external_consent": True, "ocr_provider": "unavailable"}
     assert upload(client, "a.png", image_bytes()).status_code == 503
     monkeypatch.setenv("UNLIMITED_OCR_BASE_URL", "https://gpu.example.test/v1")
     monkeypatch.setenv("UNLIMITED_OCR_API_KEY", "private-key")
@@ -116,6 +117,7 @@ def test_configuration_is_explicit_and_never_reuses_sumopod(client, monkeypatch)
 @pytest.mark.parametrize("url", ["", "http://public.example/v1", "https://user:pass@example.com/v1",
                                   "https://example.com/v1?secret=x", "https://example.com:bad/v1", "http://[bad"])
 def test_unsafe_or_malformed_configuration(url, monkeypatch):
+    monkeypatch.setenv("UNLIMITED_OCR_BACKEND", "vllm")
     monkeypatch.setenv("UNLIMITED_OCR_BASE_URL", url)
     with pytest.raises(app_main.HTTPException) as error:
         unlimited_ocr.configuration()

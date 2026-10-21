@@ -13,7 +13,7 @@ const until = async check => {
   assert.fail('OCR UI did not reach the expected state');
 };
 
-function harness(t, {failurePage = 0, onPreview} = {}) {
+function harness(t, {failurePage = 0, failureStatus = 502, totalPages = 2, filename = 'scan.pdf', imageQuota = false, onPreview} = {}) {
   const errors = [], calls = [], uploads = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', e => errors.push(e.message));
@@ -30,9 +30,13 @@ function harness(t, {failurePage = 0, onPreview} = {}) {
     status = 200; responseText = ''; listeners = {}; headers = {}; upload = {addEventListener() {}};
     open() {}
     setRequestHeader(name, value) { this.headers[name] = value; }
-    getResponseHeader(name) { return name === 'X-OCR-Engine' ? 'pdf-images' : null; }
+    getResponseHeader(name) { return name === 'X-OCR-Retryable' && this.status === 429 ? 'false' : name === 'X-OCR-Engine' ? 'pdf-images' : null; }
     addEventListener(type, fn) { this.listeners[type] = fn; }
-    send(body) { uploads.push({headers: this.headers, body}); queueMicrotask(() => this.listeners.load()); }
+    send(body) {
+      if (filename.endsWith('.png')) this.responseText = JSON.stringify({markdown: 'HASIL GAMBAR', engine: 'baidu/Unlimited-OCR', regions: [{x:0,y:0,w:1,h:.2,text:'HASIL GAMBAR',source:'unlimited-ocr'}]});
+      if (imageQuota) { this.status = 429; this.responseText = JSON.stringify({detail: 'Kuota GPU Hugging Face habis'}); }
+      uploads.push({headers: this.headers, body}); queueMicrotask(() => this.listeners.load());
+    }
   };
   w.fetch = async (endpoint, options) => {
     if (endpoint === '/api/capabilities') return Response.json({image_ocr: 'unlimited-ocr', image_ocr_model: 'baidu/Unlimited-OCR'});
@@ -40,17 +44,17 @@ function harness(t, {failurePage = 0, onPreview} = {}) {
     if (endpoint === '/api/pdf-language-check') return Response.json({languages: ['Indonesia'], assessment: 'wajar', suspect_spans: []});
     const page = Number(new URL(endpoint, 'https://example.test').searchParams.get('page'));
     if (onPreview) await onPreview(page);
-    return Response.json({page, total_pages: 2, image: 'data:image/jpeg;base64,anBlZw==',
+    return Response.json({page, total_pages: totalPages, image: 'data:image/jpeg;base64,anBlZw==',
       regions: [], page_source: page === failurePage ? null : 'unlimited-ocr',
       page_text: page === failurePage ? '' : `TEKS HALAMAN ${page}`,
-      ...(page === failurePage ? {ocr_error: 'Server Unlimited-OCR gagal', ocr_status: 502} : {}),
+      ...(page === failurePage ? {ocr_error: 'Server Unlimited-OCR gagal', ocr_status: failureStatus} : {}),
     });
   };
   for (const script of ['zip.js', 'app.js', 'tools.js']) w.eval(fs.readFileSync(path.join(root, script), 'utf8'));
-  w.document.querySelector('[data-category-select=pdf]').click();
+  w.document.querySelector(filename.endsWith('.png') ? '[data-category-select=image]' : '[data-category-select=pdf]').click();
   const drop = () => {
     const event = new w.Event('drop', {bubbles: true, cancelable: true});
-    Object.defineProperty(event, 'dataTransfer', {value: {files: [new File(['%PDF-fixture'], 'scan.pdf')], types: ['Files']}});
+    Object.defineProperty(event, 'dataTransfer', {value: {files: [new File(['fixture'], filename)], types: ['Files']}});
     w.document.body.dispatchEvent(event);
   };
   return {w, $, drop, calls, uploads, errors};
@@ -104,5 +108,34 @@ test('Netra review has separate consent and receives only OCR text', async t => 
     assert.deepEqual(Object.keys(body), ['text']);
     assert.match(body.text, /^TEKS HALAMAN [12]$/);
   }
+  assert.deepEqual(h.errors, []);
+});
+
+
+test('image text and boxes use the same inference result', async t => {
+  const h = harness(t, {filename:'scan.png'}); h.$('external-ai').checked = true; h.drop();
+  await until(() => !h.$('download-all').disabled);
+  assert.equal(h.uploads.length, 1);
+  assert.equal(h.uploads[0].headers.Accept, 'application/json');
+  assert.equal(h.calls.length, 0); // No second /api/regions inference.
+  assert.equal(h.w.document.querySelector('.region-layer').childElementCount, 1);
+  assert.match(h.w.document.querySelector('pre.transcript').textContent, /HASIL GAMBAR/);
+  assert.deepEqual(h.errors, []);
+});
+
+test('Hugging Face image quota errors stop automatic retry', async t => {
+  const h = harness(t, {filename:'scan.png',imageQuota:true}); h.$('external-ai').checked = true; h.drop();
+  await until(() => h.w.document.querySelector('.file-row.error'));
+  assert.equal(h.uploads.length, 1);
+  assert.equal(h.$('download-all').disabled, true);
+  assert.match(h.w.document.querySelector('.file-state').textContent, /Kuota GPU/);
+  assert.deepEqual(h.errors, []);
+});
+
+test('Hugging Face quota on a PDF page stops later page submissions', async t => {
+  const h = harness(t, {failurePage:1,failureStatus:429,totalPages:3}); h.$('external-ai').checked = true; h.drop();
+  await until(() => h.w.document.querySelector('.file-row.error'));
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.$('download-all').disabled, true);
   assert.deepEqual(h.errors, []);
 });

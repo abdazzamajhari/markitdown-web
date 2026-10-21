@@ -14,51 +14,41 @@ Every upload supports file-picker clicks and drag and drop, including compressio
 - **PDF signature editor:** upload or draw one signature image, add up to 30 placements across pages, drag, resize, adjust X/Y, remove placements, preview and download the final PDF. Coordinates are normalized to the displayed cropped/rotated page; the original crop and rotation are preserved. This is a **visual signature**, not a certificate-backed cryptographic signature, identity verification or certified signing service. PDFs with signature fields or signature dictionaries are refused for editing/compression to avoid invalidating existing signatures.
 - **Privacy controls:** image and PDF OCR use **Unlimited-OCR** and require explicit consent (`X-External-AI: true`) before image transmission to the configured GPU endpoint. There is no automatic fallback to Tesseract or SumoPod vision. SumoPod Netra language review has a separate optional checkbox and transmits OCR text only. Clearing the browser session reloads the page and releases its retained files/results. This runs automatically after the tab is continuously hidden (switching tabs or minimizing the browser) for 60 seconds; returning sooner cancels the deadline. Elapsed time is checked again on return and on a back/forward-cache restore because browsers may suspend background timers. Visible tabs are not cleared for inactivity. Empty sessions do not repeatedly reload in the background. No file or result is stored in web storage. Downloaded files are unaffected. Removing metadata does not redact personal information in visible text, images, annotations or form values.
 
-Document decoding, normalization, rendering and offline tools use a bounded, short-lived worker with no inherited provider credentials and worker network calls disabled. Unlimited-OCR requests run in the parent API process; the configured GPU server receives normalized images only. No public demo or unrelated OCR service is used automatically. Input files are limited to 10 MB; merging accepts up to 20 MB combined and 100 pages, while other PDF tools accept 30 pages. Image compression accepts 24 megapixels; the signature image is limited to 1 MB/2 megapixels. Results are capped at 15 MB. The application does not create a permanent archive of uploads. HTTP API responses use `no-store`; browser assets are served from the same origin with no analytics or third-party frontend resources. HTTPS terminates at Render; files are uploaded to the application server, not processed entirely on the user's device.
+Document decoding, normalization, rendering and offline tools use a bounded, short-lived worker with no inherited provider credentials and worker network calls disabled. Unlimited-OCR requests run in the parent API process; the configured GPU server receives normalized images only. The selected default external OCR service is Baidu’s official Hugging Face Space. Input files are limited to 10 MB; merging accepts up to 20 MB combined and 100 pages, while other PDF tools accept 30 pages. Image compression accepts 24 megapixels; the signature image is limited to 1 MB/2 megapixels. Results are capped at 15 MB. The application does not create a permanent archive of uploads. HTTP API responses use `no-store`; browser assets are served from the same origin with no analytics or third-party frontend resources. HTTPS terminates at Render; files are uploaded to the application server, not processed entirely on the user's device.
 
 The source is available at https://github.com/abdazzamajhari/markitdown-web. The application's source retains its MIT license; the PyMuPDF dependency is separately licensed under AGPL/commercial terms (https://pymupdf.readthedocs.io/en/latest/about.html#license-and-copyright). Retain dependency notices and observe their terms when redistributing or deploying modified versions.
 
-## Unlimited-OCR migration
+## Unlimited-OCR through Hugging Face
 
-Image and PDF OCR use [`baidu/Unlimited-OCR`](https://github.com/baidu/Unlimited-OCR). This replaces both Tesseract OCR and SumoPod vision; the model is **not** installed in the Render web container. The existing Render free service has no GPU. An independently hosted, reachable Unlimited-OCR **vLLM endpoint** is required before this migration can be activated. The Hugging Face public demo is not used as a production backend.
+Image and PDF OCR use [`baidu/Unlimited-OCR`](https://huggingface.co/baidu/Unlimited-OCR) through [Baidu's official Hugging Face Space](https://huggingface.co/spaces/baidu/Unlimited-OCR). GPU inference runs on Hugging Face; the Render web container only normalizes images/renders PDFs and calls the Space API. No GPU host needs to be configured for this default mode. The model repository currently has no Inference Provider mapping; integration uses the actual Space's documented `/run_ocr` endpoint instead of assuming a model-page URL is an API.
 
-### Configure the inference endpoint
+The default backend is `UNLIMITED_OCR_BACKEND=huggingface`. It uploads normalized PNG/JPEG pixels with a generic filename to `/gradio_api/upload`, submits `/gradio_api/call/v2/run_ocr`, and consumes the final SSE event from `/gradio_api/call/run_ocr/{event_id}`. The Space runs `mode=gundam`, `prompt=document parsing.`. Authentication is optional for the public Space: set `HF_TOKEN` in Render's environment settings for an account's access/quota. Tokens are never returned to the browser or passed to document workers. Redirects are disabled, and all Space requests go to the fixed official `baidu-unlimited-ocr.hf.space` domain.
 
-Set these environment variables on the application server (never commit credentials):
+Hugging Face ZeroGPU has daily quotas and a shared queue. Anonymous requests through this app share the Render server's outbound identity; an optional `HF_TOKEN` uses that account's quota. A public Space is a limited shared service, not an unlimited or guaranteed production endpoint. Quota failures stop automatic OCR retries and are displayed without marking text complete. Clearing a browser session does not delete files or logs retained by Hugging Face/the Space operator. Explicit image-transmission consent is required before OCR.
 
-| Variable | Value |
+| Variable | Default / purpose |
 | --- | --- |
-| `UNLIMITED_OCR_BASE_URL` | HTTPS OpenAI-compatible base URL ending in `/v1`, e.g. `https://ocr.example.com/v1` |
-| `UNLIMITED_OCR_API_KEY` | Endpoint bearer token, if required; independent of `SUMOPOD_API_KEY` |
-| `UNLIMITED_OCR_MODEL` | Served model name, default `baidu/Unlimited-OCR`; response model identity must match |
+| `UNLIMITED_OCR_BACKEND` | `huggingface`; optional alternative `vllm` |
+| `HF_TOKEN` | Optional Hugging Face access token, stored server-side only |
 | `SUMOPOD_API_KEY` | Optional, **text-only** Netra language review; not used for OCR |
+| `UNLIMITED_OCR_BASE_URL` | Used only with `vllm`: HTTPS OpenAI-compatible base URL ending in `/v1` |
+| `UNLIMITED_OCR_API_KEY` | Used only with `vllm`: endpoint bearer token if required |
+| `UNLIMITED_OCR_MODEL` | Used only with `vllm`: served name, default `baidu/Unlimited-OCR` |
 
-Only loopback endpoints permit HTTP for local development. URLs with credentials, query strings, fragments or invalid ports are refused. Keep the GPU service behind TLS and authentication; apply its own access and retention controls. Clearing this site's browser session does not delete a GPU provider's logs.
+Both clients use a 120-second total time budget and bounded response reads. The Hugging Face client requires an SSE `complete` event containing `{text, done:true}`; interrupted, empty, failed and malformed output is refused. The public Space does not expose token counts or `finish_reason`, so `done:true` establishes endpoint completion, **not** proof that dense-page text was not truncated at the Space's 8192-token generation limit. Review names, numbers, tables and page completeness against the rendered image.
 
-Use the [official vLLM recipe](https://recipes.vllm.ai/baidu/Unlimited-OCR), including its custom logits processor. Example on an existing compatible NVIDIA GPU host:
-
-```bash
-docker run --rm --gpus all --ipc host -p 127.0.0.1:8000:8000 \
-  vllm/vllm-openai:unlimited-ocr \
-  baidu/Unlimited-OCR --trust-remote-code \
-  --logits_processors vllm.model_executor.models.unlimited_ocr:NGramPerReqLogitsProcessor \
-  --no-enable-prefix-caching --mm-processor-cache-gb 0
-```
-
-Expose this server through the host's authenticated HTTPS gateway for Render. For an app running on that same host, the development URL can be `http://127.0.0.1:8000/v1`. This command is setup guidance; no GPU host is provisioned by the web app.
-
-The client sends the required literal `<image>document parsing.` prompt, `skip_special_tokens=false`, `temperature=0`, and `vllm_xargs={ngram_size:35,window_size:128}`. Every request contains one image, so the single-image window is used even for a PDF page. It allows 8192 output tokens and rejects `finish_reason=length`, wrong-model, empty, malformed, oversized or failed responses instead of presenting partial text as success. Provider calls use a 120-second time budget and bounded response reads. No automatic rewriting or generic vision probe is applied.
+The optional `vllm` client retains the [official serving recipe](https://recipes.vllm.ai/baidu/Unlimited-OCR): literal `<image>document parsing.` prompt, `skip_special_tokens=false`, `temperature=0`, `vllm_xargs={ngram_size:35,window_size:128}`, and an 8192-token output allowance. It rejects `finish_reason=length` and mismatched model names. An independently hosted endpoint is required only for this optional backend; loopback HTTP is permitted for local development.
 
 ### Image and PDF pipeline
 
 1. Require explicit user consent to send document images to the GPU server. DOCX/PPTX/XLSX/TXT/CSV/JSON extraction and compression/merge/signature tools remain independent of external OCR.
 2. Normalize single-page PNG/JPEG/WebP/TIFF to metadata-free PNG in the constrained worker, preserving orientation and flattening transparency. Image input limits remain 10 MB/8 megapixels, output longest side 2048 px.
 3. For PDFs, validate the 10 MB/30-page limit and render **each entire page** to JPEG using Poppler (`pdftoppm`, longest side 2800 px; zoom OCR uses 3200 px). Send only that page image to Unlimited-OCR, never original PDF bytes or its selectable text layer.
-4. Decode both released grounding forms (`<|ref|>label<|/ref|><|det|>boxes<|/det|>` and `<|det|>label [box]<|/det|>`). Normalize boxes by **999**, matching the upstream model implementation. Preserve the model's reading order and Markdown/HTML table text; exclude image placeholders. Invalid coordinates are omitted without discarding valid text. Missing coordinates do not trigger another model or fabricate boxes.
+4. Return image Markdown and available regions in **one inference** to the browser (`Accept: application/json`), so displaying image boxes does not consume a second GPU request. Decode both released grounding forms (`<|ref|>label<|/ref|><|det|>boxes<|/det|>` and `<|det|>label [box]<|/det|>`). Normalize boxes by **999**, matching the upstream model implementation. Preserve the model's reading order and Markdown/HTML table text; exclude image placeholders. Invalid coordinates are omitted without discarding valid text. Missing coordinates do not trigger another model or fabricate boxes.
 5. Display the real page image with OCR text and available region boxes. Process pages in numeric order and assemble Markdown in that order. Retain image previews and clear error messages when inference fails; provide complete-document downloads only after every page has usable OCR. Blank/image-only pages require review and are not silently counted as successful OCR.
 6. If separately enabled, send OCR text to SumoPod `deepseek-v4.1-flash:netra` for linguistic plausibility review. This never changes Unlimited-OCR transcription, compares against the page image, or blocks its download. A language-review outage is reported separately.
 
-### Run and activation check
+### Run and check
 
 ```bash
 pip install -r requirements.txt
@@ -67,11 +57,11 @@ python -m scripts.check_unlimited_ocr
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Supply the endpoint variables through the host's secret/environment settings before running the check. The check sends a generated image with a fresh random text challenge, verifies the configured model's response, and prints only a pass/fail summary. Passing unit tests with mocked inference does **not** demonstrate GPU availability or actual OCR accuracy. Run this check against the real endpoint, then test an image and a multipage PDF before merging/deploying the migration. `GET /health` checks the web app only; it does not load/probe the GPU. `/api/capabilities` reports configuration availability, not a live inference guarantee.
+The default Hugging Face backend works without a custom endpoint URL. The check sends a generated image with a fresh random text challenge to the selected backend and prints a pass/fail summary. Unit tests use mocked network responses; live checks are separate and consume the selected service's quota. `GET /health` checks the web app only; it does not probe Hugging Face/GPU. `/api/capabilities` reports the selected/configured provider, not a live inference guarantee.
 
 ## API
 
-`POST /api/convert` returns image OCR Markdown or validates a PDF and returns empty initial Markdown. OCR requests require `X-Filename` and `X-External-AI: true`; missing GPU configuration returns 503. The browser calls `POST /api/pdf-preview?page=N` with the same consent header to receive the full-page JPEG, `page_text`, `regions`, and page count. Successful PDF OCR has `page_source=unlimited-ocr`. Provider failure retains the image and returns `ocr_error`/`ocr_status` with no successful page text. `preview_only=true` renders locally without OCR and requires no external consent. `POST /api/regions` returns Unlimited-OCR grounding regions, with consent. `POST /api/pdf-language-check` accepts text and its own consent request for the separate optional Netra review. No provider credentials or endpoint URL appear in capability responses.
+`POST /api/convert` returns image OCR Markdown or validates a PDF and returns empty initial Markdown. OCR requests require `X-Filename` and `X-External-AI: true`. For images, `Accept: application/json` returns `{markdown, engine, regions}` from a single inference; the default remains plain Markdown for API compatibility. Missing vLLM configuration returns 503 only when that optional backend is selected. The browser calls `POST /api/pdf-preview?page=N` with the same consent header to receive the full-page JPEG, `page_text`, `regions`, and page count. Successful PDF OCR has `page_source=unlimited-ocr`. Provider failure retains the image and returns `ocr_error`/`ocr_status` with no successful page text. `preview_only=true` renders locally without OCR and requires no external consent. `POST /api/regions` returns Unlimited-OCR grounding regions, with consent. `POST /api/pdf-language-check` accepts text and its own consent request for the separate optional Netra review. No provider credentials or endpoint URL appear in capability responses.
 
 New raw-binary endpoints use `X-Filename` (URL-encoded) and `X-Options` (base64url JSON):
 
@@ -95,4 +85,4 @@ npm ci --ignore-scripts
 npm test
 ```
 
-Tests check real binary outputs, merge page order/text/geometry/forms/links/annotations/bookmarks/metadata and malformed framing/limits, TIFF input/output/LZW/metadata/preview/OCR/signatures and multipage refusal, image orientation/transparency/metadata, PDF compression, rotated/cropped signature geometry, multiple placements, encrypted/signed PDF refusal, and external-OCR consent. Mocked vLLM tests verify required payloads, model identity, text/box parsing, metadata removal, image-only PDF transmission, provider errors/timeouts, truncation and independent text-only language review. Node tests cover automatic session cleanup and DOM upload flows: file drops, picker parity, page-wide routing, TIFF, malformed selections, busy controls, merge order and retained-session detection. GitHub CI runs both suites and the Docker build; Render's existing service deploys from `main` after checks pass.
+Tests check real binary outputs, merge page order/text/geometry/forms/links/annotations/bookmarks/metadata and malformed framing/limits, TIFF input/output/LZW/metadata/preview/OCR/signatures and multipage refusal, image orientation/transparency/metadata, PDF compression, rotated/cropped signature geometry, multiple placements, encrypted/signed PDF refusal, and external-OCR consent. Mocked Hugging Face and vLLM tests verify required payloads, model identity, text/box parsing, metadata removal, image-only PDF transmission, provider errors/timeouts, truncation and independent text-only language review. Node tests cover automatic session cleanup and DOM upload flows: file drops, picker parity, page-wide routing, TIFF, malformed selections, busy controls, merge order and retained-session detection. GitHub CI runs both suites and the Docker build; Render's existing service deploys from `main` after checks pass.

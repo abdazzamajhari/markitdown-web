@@ -227,10 +227,10 @@ def review_ocr_language(ocr_text: str) -> dict:
             "suspect_spans": spans, "scope": "text_only"}
 
 
-def convert_unlimited(data: bytes, extension: str) -> str:
+def convert_unlimited(data: bytes, extension: str) -> dict:
     # Provider credentials never enter the constrained image decoder.
     png = run_worker(data, extension, "prepare-vision", timeout=20)
-    return unlimited_ocr.analyze(png, "image/png")["markdown"]
+    return unlimited_ocr.analyze(png, "image/png")
 
 
 @app.get("/health")
@@ -246,7 +246,8 @@ async def capabilities():
     except HTTPException:
         model, provider = unlimited_ocr.MODEL, "unavailable"
     return {"image_ocr": provider, "image_ocr_model": model,
-            "pdf_ocr": provider, "requires_external_consent": True}
+            "pdf_ocr": provider, "requires_external_consent": True,
+            "ocr_provider": unlimited_ocr.backend() if provider != "unavailable" else "unavailable"}
 
 
 @app.get("/", include_in_schema=False)
@@ -346,6 +347,7 @@ async def pdf_preview(request: Request, page: int = 1, preview_only: bool = Fals
             except HTTPException as exc:
                 # Keep the actual rendered page visible on provider failure.
                 payload["ocr_error"], payload["ocr_status"] = exc.detail, exc.status_code
+                payload["ocr_retryable"] = False
         if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT_BYTES:
             raise HTTPException(413, "Pratinjau PDF terlalu besar")
     return JSONResponse(payload, headers={"Cache-Control": "no-store"})
@@ -410,8 +412,11 @@ async def convert_file(request: Request):
         recent_requests.append(now)
     async with slots:
         if extension in IMAGE_FORMATS:
-            markdown = await run_in_threadpool(convert_unlimited, bytes(data), extension)
-            engine = unlimited_ocr.MODEL
+            result = await run_in_threadpool(convert_unlimited, bytes(data), extension)
+            markdown, engine = result["markdown"], unlimited_ocr.MODEL
+            if "application/json" in request.headers.get("accept", ""):
+                return JSONResponse({"markdown": markdown, "engine": engine, "regions": result["regions"]},
+                                    headers={"Cache-Control": "no-store", "X-OCR-Engine": engine})
         elif extension == ".pdf":
             markdown, engine = await run_in_threadpool(convert_pdf, bytes(data))
         else:

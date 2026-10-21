@@ -17,6 +17,7 @@ def client(monkeypatch):
     main.recent_requests.clear()
     main.region_requests.clear()
     monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
+    monkeypatch.setenv("UNLIMITED_OCR_BACKEND", "vllm")
     monkeypatch.setenv("UNLIMITED_OCR_BASE_URL", "https://gpu.example.test/v1")
     monkeypatch.setattr(unlimited_ocr.httpx, "stream", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("external provider called")))
     monkeypatch.setattr(main.httpx, "post", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("external provider called")))

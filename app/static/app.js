@@ -32,8 +32,8 @@ window.setOcrCategory = (category) => {
   ['ocr-eyebrow', 'page-title', 'ocr-description', 'upload-hint'].forEach((id, i) => { document.getElementById(id).textContent = copy[i]; });
   document.getElementById('ocr-ai-options').hidden = category === 'document';
   ocrMode.hidden = category === 'document';
-  document.getElementById('ocr-ai-label').textContent = 'Izinkan pengiriman gambar ke server Unlimited-OCR';
-  document.getElementById('ocr-ai-hint').textContent = category === 'pdf' ? 'OCR memakai Unlimited-OCR. Setiap halaman dirender penuh menjadi gambar sebelum dikirim; berkas PDF asli tidak dikirim ke model. Persetujuan diperlukan untuk memulai.' : 'OCR memakai Unlimited-OCR. Gambar dinormalisasi dan metadata dihapus sebelum dikirim ke server GPU. Persetujuan diperlukan untuk memulai.';
+  document.getElementById('ocr-ai-label').textContent = 'Izinkan pengiriman gambar ke Hugging Face untuk Unlimited-OCR';
+  document.getElementById('ocr-ai-hint').textContent = category === 'pdf' ? 'OCR memakai Unlimited-OCR. Setiap halaman dirender penuh menjadi gambar sebelum dikirim; berkas PDF asli tidak dikirim ke model. Pemrosesan mengikuti kuota dan kebijakan penyimpanan Hugging Face. Persetujuan diperlukan untuk memulai.' : 'OCR memakai Unlimited-OCR. Gambar dinormalisasi dan metadata dihapus sebelum dikirim ke Space resmi Baidu di Hugging Face. Persetujuan diperlukan untuk memulai.';
   document.getElementById('language-review-options').hidden = category !== 'pdf';
   for (const row of list.children) row.hidden = row.dataset.category !== category;
   notice.textContent = '';
@@ -110,7 +110,7 @@ function addFiles(files) {
   const selected = Array.from(files);
   if (!selected.length) return;
   if (ocrCategory !== 'document' && !externalAi.checked) {
-    notice.textContent = 'Izinkan pengiriman gambar ke server Unlimited-OCR sebelum menambahkan berkas OCR.';
+    notice.textContent = 'Izinkan pengiriman gambar ke Hugging Face untuk Unlimited-OCR sebelum menambahkan berkas OCR.';
     return;
   }
   let rejected = 0;
@@ -132,6 +132,7 @@ function upload(item) {
     xhr.timeout = 180000;
     xhr.setRequestHeader('X-Filename', encodeURIComponent(item.file.name));
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    if (imageFormats.has(item.extension)) xhr.setRequestHeader('Accept', 'application/json');
     if (item.externalAi) xhr.setRequestHeader('X-External-AI', 'true');
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) {
@@ -146,13 +147,20 @@ function upload(item) {
     });
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve({markdown: xhr.responseText, engine: xhr.getResponseHeader('X-OCR-Engine')});
+        if (imageFormats.has(item.extension)) {
+          try {
+            const result = JSON.parse(xhr.responseText);
+            if (typeof result.markdown !== 'string' || !Array.isArray(result.regions)) throw new Error();
+            resolve(result);
+          } catch { reject(new Error('Respons OCR gambar tidak valid')); }
+        } else resolve({markdown: xhr.responseText, engine: xhr.getResponseHeader('X-OCR-Engine')});
       } else {
         let message = `HTTP ${xhr.status}`;
         try { message = JSON.parse(xhr.responseText).detail || message; } catch { /* Use HTTP status. */ }
         const error = new Error(message);
         error.status = xhr.status;
         error.retryAfter = Number(xhr.getResponseHeader('Retry-After')) || 3;
+        error.retryable = xhr.getResponseHeader('X-OCR-Retryable') !== 'false';
         reject(error);
       }
     });
@@ -200,7 +208,7 @@ function showRegions(layer, regions, message) {
     ? `${layer.childElementCount} area teks ditandai. Klik kotak untuk membaca per area.`
     : 'Koordinat kotak belum tersedia untuk halaman ini. Periksa hasil teks di sebelahnya.';
 }
-function renderDetail(item, markdown, engine, record) {
+function renderDetail(item, markdown, engine, record, initialRegions) {
   const actions = document.createElement('div');
   actions.className = 'file-actions';
   const single = document.createElement('button');
@@ -284,13 +292,8 @@ function renderDetail(item, markdown, engine, record) {
           image.src = URL.createObjectURL(preview);
           objectUrls.add(image.src);
         }
-        const response = await fetch('/api/regions', {
-          method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream', ...(item.externalAi && externalAi.checked ? {'X-External-AI': 'true'} : {})},
-          body: item.file,
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-        showRegions(layer, payload.regions, regionMessage);
+        if (!Array.isArray(initialRegions)) throw new Error('Kotak lokasi OCR tidak tersedia pada hasil ini');
+        showRegions(layer, initialRegions, regionMessage);
         loaded = true;
       } catch (error) {
         regionMessage.textContent = `${error.message}. Tutup lalu buka detail untuk mencoba lagi.`;
@@ -530,7 +533,7 @@ function renderDetail(item, markdown, engine, record) {
         updateTranscript(page, pageText, payload.page_source);
         if (payload.ocr_error) {
           lastPreviewError = payload.ocr_error;
-          fatalOcrError = [402, 502, 503, 504].includes(payload.ocr_status);
+          fatalOcrError = [402, 429, 502, 503, 504].includes(payload.ocr_status);
           regionMessage.textContent = payload.ocr_error;
         } else if (payload.preview_only) {
           regionMessage.textContent = 'Halaman PDF sudah dirender menjadi gambar penuh untuk Unlimited-OCR.';
@@ -691,19 +694,19 @@ async function processQueue() {
       while (!result) {
         try { result = await upload(item); }
         catch (error) {
-          if (error.status !== 429) throw error;
+          if (error.status !== 429 || error.retryable === false) throw error;
           const seconds = Math.min(120, Math.max(1, error.retryAfter));
           item.state.textContent = `Menunggu giliran server ${seconds} detik…`;
           await new Promise(resolve => setTimeout(resolve, seconds * 1000));
         }
       }
-      const {markdown, engine} = result;
+      const {markdown, engine, regions} = result;
       const label = imageFormats.has(item.extension) ? 'Unlimited-OCR' : 'MarkItDown';
       item.state.textContent = item.extension === 'pdf' ? 'Menyiapkan OCR halaman PDF…' :
         markdown.trim() ? `Selesai (${label})` : `Selesai (${label}) · tidak ada teks`;
       const record = {name: item.file.name, markdown, category: item.category};
       emptyState.hidden = true;
-      const loadRegions = renderDetail(item, markdown, engine, record);
+      const loadRegions = renderDetail(item, markdown, engine, record, regions);
       updateStatus();
       if (loadRegions && (imageFormats.has(item.extension) || item.extension === 'pdf')) {
         const scan = await loadRegions();
@@ -763,7 +766,7 @@ document.addEventListener('drop', (event) => {
 window.addEventListener('pagehide', () => { for (const url of objectUrls) URL.revokeObjectURL(url); });
 fetch('/api/capabilities', {cache: 'no-store'})
   .then((response) => response.json())
-  .then(({image_ocr, image_ocr_model}) => {
-    ocrMode.textContent = image_ocr === 'unavailable' ? 'Unlimited-OCR belum dikonfigurasi. Hubungi pengelola untuk mengaktifkan server GPU.' : `OCR gambar dan PDF: ${image_ocr_model} · maksimal 30 halaman per PDF. Pengiriman ke server GPU memerlukan persetujuan.`;
+  .then(({image_ocr, image_ocr_model, ocr_provider}) => {
+    ocrMode.textContent = image_ocr === 'unavailable' ? 'Unlimited-OCR belum dikonfigurasi. Hubungi pengelola untuk mengaktifkan server GPU.' : `OCR gambar dan PDF: ${image_ocr_model}${ocr_provider === 'huggingface' ? ' melalui Hugging Face Spaces' : ''} · maksimal 30 halaman per PDF. Layanan memiliki kuota dan antrean.`;
   })
   .catch(() => { ocrMode.textContent = 'Status layanan OCR tidak tersedia.'; });
