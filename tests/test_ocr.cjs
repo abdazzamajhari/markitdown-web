@@ -73,8 +73,9 @@ test('Unlimited-OCR PDF text is assembled in page order with consent on every re
   const h = harness(t); h.$('external-ai').checked = true; h.drop();
   await until(() => !h.$('download-all').disabled);
   assert.equal(h.uploads[0].headers['X-External-AI'], 'true');
+  assert.equal(h.uploads[0].headers['X-OCR-Provider'], 'huggingface');
   assert.deepEqual(h.calls.map(c => c.endpoint), ['/api/pdf-preview?page=1', '/api/pdf-preview?page=2']);
-  assert.ok(h.calls.every(c => c.options.headers['X-External-AI'] === 'true'));
+  assert.ok(h.calls.every(c => c.options.headers['X-External-AI'] === 'true' && c.options.headers['X-OCR-Provider'] === 'huggingface'));
   const text = h.w.document.querySelector('pre.transcript').textContent;
   assert.ok(text.indexOf('TEKS HALAMAN 1') < text.indexOf('TEKS HALAMAN 2'));
   assert.match(text, /Unlimited-OCR/); assert.doesNotMatch(text, /Tesseract/);

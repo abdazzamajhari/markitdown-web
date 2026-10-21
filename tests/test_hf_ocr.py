@@ -110,7 +110,7 @@ def test_json_image_result_contains_text_and_boxes_in_one_inference(setup):
     install, calls = setup; install()
     client = TestClient(main.app)
     response = client.post("/api/convert", content=image_bytes(), headers={
-        "X-Filename": "private-original-name.png", "X-External-AI": "true", "Accept": "application/json"})
+        "X-Filename": "private-original-name.png", "X-External-AI": "true", "X-OCR-Provider": "huggingface", "Accept": "application/json"})
     assert response.status_code == 200, response.text
     assert response.json()["markdown"] == "HASIL HUGGING FACE"
     assert response.json()["regions"][0]["source"] == "unlimited-ocr"
@@ -162,3 +162,13 @@ def test_heartbeat_stream_obeys_total_deadline(setup, monkeypatch):
     with pytest.raises(main.HTTPException) as error:
         ocr.analyze(b'pixels','image/png')
     assert error.value.status_code == 504 and len(received) <= 8
+
+
+def test_old_sumopod_client_cannot_authorize_new_huggingface_destination(setup):
+    install, calls = setup; install()
+    client = TestClient(main.app)
+    # A pre-migration tab only consented to SumoPod, with the legacy generic header.
+    for path in ("/api/convert", "/api/regions"):
+        response = client.post(path,content=image_bytes(),headers={"X-Filename":"a.png","X-External-AI":"true"})
+        assert response.status_code == 400 and "Muat ulang" in response.json()["detail"]
+    assert not calls

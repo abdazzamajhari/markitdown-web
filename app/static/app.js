@@ -133,7 +133,10 @@ function upload(item) {
     xhr.setRequestHeader('X-Filename', encodeURIComponent(item.file.name));
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     if (imageFormats.has(item.extension)) xhr.setRequestHeader('Accept', 'application/json');
-    if (item.externalAi) xhr.setRequestHeader('X-External-AI', 'true');
+    if (item.externalAi) {
+      xhr.setRequestHeader('X-External-AI', 'true');
+      xhr.setRequestHeader('X-OCR-Provider', 'huggingface');
+    }
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) {
         const percent = Math.round(event.loaded / event.total * 100);
@@ -484,7 +487,7 @@ function renderDetail(item, markdown, engine, record, initialRegions) {
             const timer = setTimeout(() => controller.abort(), previewOnly ? 45000 : 160000);
             try {
               response = await fetch(`/api/pdf-preview?page=${page}${zoomForOcr ? '&zoom=true' : ''}`, {
-                method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream', 'X-External-AI': 'true'},
+                method: 'POST', headers: {'X-Filename': encodeURIComponent(item.file.name), 'Content-Type': 'application/octet-stream', 'X-External-AI': 'true', 'X-OCR-Provider': 'huggingface'},
                 body: item.file, signal: controller.signal,
               });
             } finally { clearTimeout(timer); }

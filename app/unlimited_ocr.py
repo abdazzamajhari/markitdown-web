@@ -48,6 +48,8 @@ def configuration() -> tuple[str, str, str]:
 def require_consent(request) -> None:
     if request.headers.get("x-external-ai") != "true":
         raise HTTPException(400, "Izinkan pengiriman gambar ke server Unlimited-OCR sebelum menjalankan OCR")
+    if backend() == "huggingface" and request.headers.get("x-ocr-provider") != "huggingface":
+        raise HTTPException(400, "Muat ulang halaman dan izinkan pengiriman gambar khusus ke Hugging Face untuk Unlimited-OCR")
 
 
 def parse_output(raw: str) -> dict:
